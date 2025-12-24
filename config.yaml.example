@@ -1,0 +1,60 @@
+server:
+  host: "0.0.0.0"
+  port: 8080
+
+sonarr:
+  - id: "main"
+    name: "Main Sonarr"
+    url: "http://localhost:8989"
+    api_key: "your-sonarr-api-key"
+    enabled: true
+
+qbittorrent:
+  - id: "main"
+    name: "Main qBittorrent"
+    url: "http://localhost:8080"
+    username: "admin"
+    password: "adminadmin"
+    enabled: true
+
+trackers:
+  - id: "tleechreload"
+    name: "TLeechReload"
+    url_regex: "tracker\\.tleechreload\\.org"
+    enabled: true
+
+queue_cleaners:
+  - id: "default"
+    name: "Default Queue Cleaner"
+    enabled: true
+    dry_run: false
+    schedule: "every 1h"
+    clients:
+      bittorrent: ["main"]  # Array of bittorrent client IDs (empty = use all enabled)
+      arr: ["main"]          # Array of *arr app IDs (empty = use all enabled, or none if not needed)
+    max_age: "24h"
+    min_speed: 1048576
+    remove_failed: true
+    remove_stalled: true
+    remove_slow: true
+    trackers:
+      tracker_ids: []  # Array of tracker IDs (empty = no filtering)
+      filter_mode: ""   # "include" or "exclude"
+
+download_cleaners:
+  - id: "default"
+    name: "Default Download Cleaner"
+    enabled: true
+    dry_run: false
+    schedule: "every 6h"
+    clients:
+      bittorrent: ["main"]  # Array of bittorrent client IDs (empty = use all enabled)
+      arr: []                # Array of *arr app IDs (empty = use all enabled, or none if not needed)
+    max_ratio: 2.0
+    min_seeding_time: "7d"
+    max_seeding_time: ""
+    trackers:
+      tracker_ids: []  # Array of tracker IDs (empty = no filtering)
+      filter_mode: ""   # "include" or "exclude"
+
+
