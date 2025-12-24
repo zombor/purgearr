@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -42,9 +43,10 @@ func (d Duration) Duration() time.Duration {
 // Config represents the main application configuration
 type Config struct {
 	Server           ServerConfig            `yaml:"server"`
-	Sonarr           []SonarrConfig          `yaml:"sonarr"`      // Support multiple Sonarr instances
-	QBittorrent      []QBittorrentConfig     `yaml:"qbittorrent"` // Support multiple qBittorrent instances
-	Trackers         []TrackerConfig         `yaml:"trackers"`    // Tracker definitions
+	Sonarr           []SonarrConfig          `yaml:"sonarr"`          // Support multiple Sonarr instances
+	QBittorrent      []QBittorrentConfig     `yaml:"qbittorrent"`     // Support multiple qBittorrent instances
+	Trackers         []TrackerConfig         `yaml:"trackers"`        // Tracker definitions
+	MalwareBlocker   MalwareBlockerConfig    `yaml:"malware_blocker"` // Malware blocker configuration
 	QueueCleaners    []QueueCleanerConfig    `yaml:"queue_cleaners"`
 	DownloadCleaners []DownloadCleanerConfig `yaml:"download_cleaners"`
 }
@@ -92,6 +94,15 @@ type ClientSelection struct {
 type TrackerSelection struct {
 	TrackerIDs []string `yaml:"tracker_ids"` // Array of tracker IDs to include/exclude
 	FilterMode string   `yaml:"filter_mode"` // "include" or "exclude" (empty = no filtering)
+}
+
+// MalwareBlockerConfig defines malware blocker settings
+type MalwareBlockerConfig struct {
+	Enabled  bool             `yaml:"enabled"`  // Enable/disable malware blocker
+	DryRun   bool             `yaml:"dry_run"`  // If true, don't actually block files (just log what would be blocked)
+	Schedule string           `yaml:"schedule"` // Schedule interval (e.g., "every 1h")
+	Patterns []string         `yaml:"patterns"` // List of regex patterns to match file names/paths (e.g., ["Trailer.*", ".*sample.*", "\\.nfo$", "\\.exe$"])
+	Trackers TrackerSelection `yaml:"trackers"` // Tracker filtering configuration
 }
 
 // QueueCleanerConfig defines a queue cleaner instance
@@ -214,6 +225,36 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("tracker %d: duplicate id '%s'", i, t.ID)
 			}
 			trackerIDs[t.ID] = true
+		}
+	}
+
+	// Validate Malware Blocker
+	if c.MalwareBlocker.Enabled {
+		if c.MalwareBlocker.Schedule == "" {
+			return fmt.Errorf("malware_blocker: schedule is required when enabled")
+		}
+		if len(c.MalwareBlocker.Patterns) == 0 {
+			return fmt.Errorf("malware_blocker: at least one pattern is required when enabled")
+		}
+		// Validate that all patterns are valid regex
+		for i, pattern := range c.MalwareBlocker.Patterns {
+			if pattern == "" {
+				continue // Empty patterns are skipped at runtime
+			}
+			if _, err := regexp.Compile(pattern); err != nil {
+				return fmt.Errorf("malware_blocker: invalid regex pattern at index %d '%s': %w", i, pattern, err)
+			}
+		}
+		// Validate tracker IDs
+		if len(c.MalwareBlocker.Trackers.TrackerIDs) > 0 {
+			for _, id := range c.MalwareBlocker.Trackers.TrackerIDs {
+				if !trackerIDs[id] {
+					return fmt.Errorf("malware_blocker: tracker id '%s' does not exist or is not enabled", id)
+				}
+			}
+		}
+		if c.MalwareBlocker.Trackers.FilterMode != "" && c.MalwareBlocker.Trackers.FilterMode != "include" && c.MalwareBlocker.Trackers.FilterMode != "exclude" {
+			return fmt.Errorf("malware_blocker: tracker filter_mode must be 'include' or 'exclude'")
 		}
 	}
 

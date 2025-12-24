@@ -23,6 +23,26 @@ trackers:
     url_regex: "tracker\\.tleechreload\\.org"
     enabled: true
 
+malware_blocker:
+  enabled: true
+  dry_run: false
+  schedule: "every 1h"
+  trackers:
+    tracker_ids: []  # Array of tracker IDs (empty = no filtering)
+    filter_mode: ""   # "include" or "exclude"
+  patterns:
+    - "Trailer.*"      # Matches files starting with "Trailer"
+    - ".*sample.*"     # Matches files containing "sample" (case-sensitive)
+    - "(?i).*sample.*" # Matches files containing "sample" (case-insensitive)
+    - "\\.nfo$"        # Matches files ending with .nfo
+    - "\\.srr$"        # Matches files ending with .srr
+    - "\\.exe$"        # Matches files ending with .exe
+    - "\\.bat$"        # Matches files ending with .bat
+    - "\\.cmd$"        # Matches files ending with .cmd
+    - "\\.scr$"        # Matches files ending with .scr
+    - "\\.vbs$"        # Matches files ending with .vbs
+    - "\\.js$"         # Matches files ending with .js
+
 queue_cleaners:
   - id: "default"
     name: "Default Queue Cleaner"

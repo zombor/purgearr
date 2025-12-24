@@ -262,3 +262,102 @@ func (c *Client) GetAppVersion() (string, error) {
 
 	return strings.TrimSpace(string(body)), nil
 }
+
+// TorrentFile represents a file within a torrent
+type TorrentFile struct {
+	Index    int     `json:"index"` // File index (used for setting priority)
+	Name     string  `json:"name"`
+	Size     int64   `json:"size"`
+	Progress float64 `json:"progress"`
+	Priority int     `json:"priority"`
+	IsSeed   bool    `json:"is_seed"`
+}
+
+// GetTorrentFiles retrieves files for a specific torrent
+func (c *Client) GetTorrentFiles(hash string) ([]TorrentFile, error) {
+	if err := c.ensureLoggedIn(); err != nil {
+		return nil, err
+	}
+
+	filesURL := fmt.Sprintf("%s/api/v2/torrents/files?hash=%s", c.url, hash)
+
+	req, err := http.NewRequest("GET", filesURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("making request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusForbidden {
+		c.loggedIn = false
+		if err := c.Login(); err != nil {
+			return nil, fmt.Errorf("re-authenticating: %w", err)
+		}
+		return c.GetTorrentFiles(hash)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(body))
+	}
+
+	var files []TorrentFile
+	if err := json.NewDecoder(resp.Body).Decode(&files); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+
+	return files, nil
+}
+
+// SetFilePriority sets the download priority for specific files in a torrent
+// Priority: 0 = Do not download, 1 = Normal priority, 6 = High priority, 7 = Maximum priority
+func (c *Client) SetFilePriority(hash string, fileIndices []int, priority int) error {
+	if err := c.ensureLoggedIn(); err != nil {
+		return err
+	}
+
+	priorityURL := fmt.Sprintf("%s/api/v2/torrents/filePrio", c.url)
+
+	data := url.Values{}
+	data.Set("hash", hash)
+	data.Set("priority", strconv.Itoa(priority))
+
+	// Convert file indices to comma-separated string
+	indices := make([]string, len(fileIndices))
+	for i, idx := range fileIndices {
+		indices[i] = strconv.Itoa(idx)
+	}
+	data.Set("id", strings.Join(indices, "|"))
+
+	req, err := http.NewRequest("POST", priorityURL, strings.NewReader(data.Encode()))
+	if err != nil {
+		return fmt.Errorf("creating request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("making request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusForbidden {
+		c.loggedIn = false
+		if err := c.Login(); err != nil {
+			return fmt.Errorf("re-authenticating: %w", err)
+		}
+		return c.SetFilePriority(hash, fileIndices, priority)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
