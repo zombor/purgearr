@@ -9,6 +9,7 @@ import (
 
 	"github.com/zombor/purgearr/internal/clients/qbittorrent"
 	"github.com/zombor/purgearr/internal/clients/sonarr"
+	"github.com/zombor/purgearr/internal/clients/radarr"
 	"github.com/zombor/purgearr/internal/config"
 	"github.com/zombor/purgearr/internal/scheduler"
 )
@@ -19,19 +20,21 @@ type Handler struct {
 	scheduler      *scheduler.Scheduler
 	qbtClient      *qbittorrent.Client
 	sonarrClient   *sonarr.Client
+	radarrClient   *radarr.Client
 	logger         *slog.Logger
 	configPath     string
 }
 
 // NewHandler creates a new API handler
-func NewHandler(cfg *config.Config, sched *scheduler.Scheduler, qbtClient *qbittorrent.Client, sonarrClient *sonarr.Client, logger *slog.Logger, configPath string) *Handler {
+func NewHandler(cfg *config.Config, sched *scheduler.Scheduler, qbtClient *qbittorrent.Client, sonarrClient *sonarr.Client, radarrClient *radarr.Client, logger *slog.Logger, configPath string) *Handler {
 	return &Handler{
-		config:      cfg,
-		scheduler:   sched,
-		qbtClient:   qbtClient,
+		config:       cfg,
+		scheduler:    sched,
+		qbtClient:    qbtClient,
 		sonarrClient: sonarrClient,
-		logger:      logger,
-		configPath:  configPath,
+		radarrClient: radarrClient,
+		logger:       logger,
+		configPath:   configPath,
 	}
 }
 
@@ -79,14 +82,20 @@ func (h *Handler) GetStatus(w http.ResponseWriter, r *http.Request) {
 	// Count enabled clients
 	qbtEnabled := 0
 	sonarrEnabled := 0
+	radarrEnabled := 0
 	for _, client := range h.config.BittorrentClients {
 		if client.Enabled && client.Kind == "qbittorrent" {
 			qbtEnabled++
 		}
 	}
 	for _, arr := range h.config.Arrs {
-		if arr.Enabled && arr.Kind == "sonarr" {
-			sonarrEnabled++
+		if arr.Enabled {
+			switch arr.Kind {
+			case "sonarr":
+				sonarrEnabled++
+			case "radarr":
+				radarrEnabled++
+			}
 		}
 	}
 
@@ -100,6 +109,10 @@ func (h *Handler) GetStatus(w http.ResponseWriter, r *http.Request) {
 			"sonarr": map[string]interface{}{
 				"count":   sonarrEnabled,
 				"enabled": sonarrEnabled,
+			},
+			"radarr": map[string]interface{}{
+				"count":   radarrEnabled,
+				"enabled": radarrEnabled,
 			},
 		},
 	}
@@ -165,6 +178,31 @@ func (h *Handler) TestSonarrConnection(w http.ResponseWriter, r *http.Request) {
 	}
 
 	status, err := h.sonarrClient.GetSystemStatus()
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"version": status.Version,
+	})
+}
+
+// TestRadarrConnection tests the Radarr connection
+func (h *Handler) TestRadarrConnection(w http.ResponseWriter, r *http.Request) {
+	if h.radarrClient == nil {
+		http.Error(w, "Radarr client not configured", http.StatusBadRequest)
+		return
+	}
+
+	status, err := h.radarrClient.GetSystemStatus()
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)

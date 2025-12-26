@@ -22,6 +22,7 @@ func SetupRoutes(mux *http.ServeMux, handler *Handler) {
 	mux.HandleFunc("POST /api/v1/cleaners/download/{id}/run", handler.RunDownloadCleaner)
 	mux.HandleFunc("POST /api/v1/cleaners/malware-blocker/run", handler.RunMalwareBlocker)
 	mux.HandleFunc("GET /api/v1/clients/sonarr/test", handler.TestSonarrConnection)
+	mux.HandleFunc("GET /api/v1/clients/radarr/test", handler.TestRadarrConnection)
 	mux.HandleFunc("GET /api/v1/clients/qbittorrent/test", handler.TestQBittorrentConnection)
 	mux.HandleFunc("GET /api/v1/health", handler.HealthCheck)
 

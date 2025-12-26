@@ -9,20 +9,120 @@ import (
 	"time"
 
 	"github.com/zombor/purgearr/internal/clients/qbittorrent"
+	"github.com/zombor/purgearr/internal/clients/radarr"
 	"github.com/zombor/purgearr/internal/clients/sonarr"
 	"github.com/zombor/purgearr/internal/config"
 )
 
+// QueueItem represents a generic queue item from an *arr app
+type QueueItem struct {
+	ID             int
+	Title          string
+	Status         string
+	StatusMessages []StatusMessage
+	ErrorMessage   string
+	DownloadID     string
+}
+
+// StatusMessage represents a status message for a queue item
+type StatusMessage struct {
+	Title    string
+	Messages []string
+}
+
+// QueueResponse represents a generic queue response from an *arr app
+type QueueResponse struct {
+	Records []QueueItem
+}
+
 // arrQueueItem represents a queue item from an *arr app
 type arrQueueItem struct {
 	arrID string
-	item  *sonarr.QueueItem
+	item  QueueItem
 }
 
 // ArrClient represents a generic *arr app client interface
 type ArrClient interface {
-	GetQueue() (*sonarr.QueueResponse, error)
+	GetQueue() (*QueueResponse, error)
 	RemoveFromQueue(id int, removeFromClient bool, blocklist bool) error
+}
+
+// SonarrClientWrapper wraps a Sonarr client to implement ArrClient
+type SonarrClientWrapper struct {
+	Client *sonarr.Client
+}
+
+func (w *SonarrClientWrapper) GetQueue() (*QueueResponse, error) {
+	resp, err := w.Client.GetQueue()
+	if err != nil {
+		return nil, err
+	}
+
+	records := make([]QueueItem, len(resp.Records))
+	for i, item := range resp.Records {
+		statusMessages := make([]StatusMessage, len(item.StatusMessages))
+		for j, sm := range item.StatusMessages {
+			statusMessages[j] = StatusMessage{
+				Title:    sm.Title,
+				Messages: sm.Messages,
+			}
+		}
+		records[i] = QueueItem{
+			ID:             item.ID,
+			Title:          item.Title,
+			Status:         item.Status,
+			StatusMessages: statusMessages,
+			ErrorMessage:   item.ErrorMessage,
+			DownloadID:     item.DownloadID,
+		}
+	}
+
+	return &QueueResponse{
+		Records: records,
+	}, nil
+}
+
+func (w *SonarrClientWrapper) RemoveFromQueue(id int, removeFromClient bool, blocklist bool) error {
+	return w.Client.RemoveFromQueue(id, removeFromClient, blocklist)
+}
+
+// RadarrClientWrapper wraps a Radarr client to implement ArrClient
+type RadarrClientWrapper struct {
+	Client *radarr.Client
+}
+
+func (w *RadarrClientWrapper) GetQueue() (*QueueResponse, error) {
+	resp, err := w.Client.GetQueue()
+	if err != nil {
+		return nil, err
+	}
+
+	records := make([]QueueItem, len(resp.Records))
+	for i, item := range resp.Records {
+		statusMessages := make([]StatusMessage, len(item.StatusMessages))
+		for j, sm := range item.StatusMessages {
+			statusMessages[j] = StatusMessage{
+				Title:    sm.Title,
+				Messages: sm.Messages,
+			}
+		}
+		records[i] = QueueItem{
+			ID:             item.ID,
+			Title:          item.Title,
+			Status:         item.Status,
+			StatusMessages: statusMessages,
+			ErrorMessage:   item.ErrorMessage,
+			DownloadID:     item.DownloadID,
+		}
+	}
+
+	return &QueueResponse{
+		Records: records,
+	}, nil
+}
+
+func (w *RadarrClientWrapper) RemoveFromQueue(id int, removeFromClient bool, blocklist bool) error {
+	return w.Client.RemoveFromQueue(id, removeFromClient, blocklist)
 }
 
 // torrentStrikes tracks strikes for each torrent hash
@@ -113,25 +213,44 @@ func (c *Cleaner) getOrCreateStrikes(hash string) *torrentStrikes {
 	return strikes
 }
 
-// isImportFailed checks if a Sonarr queue item indicates import failure
-func isImportFailed(item *sonarr.QueueItem) bool {
-	// Check Status field - common failure statuses in Sonarr
-	if item.Status == "warning" || item.Status == "error" {
+// isImportFailed checks if an *arr queue item indicates import failure
+// This should NOT match stalled downloads - those are handled by the stalled check
+func isImportFailed(item QueueItem) bool {
+	// Check Status field - only "error" status indicates failure, not "warning"
+	// "warning" can be used for stalled downloads, so we need to check the actual message
+	if item.Status == "error" {
 		return true
 	}
 
-	// Check ErrorMessage field
-	if item.ErrorMessage != "" {
-		return true
-	}
-
-	// Check StatusMessages for error indicators
+	// Check StatusMessages for specific import failure indicators
+	// Look for titles that specifically indicate import/download failure
 	for _, statusMsg := range item.StatusMessages {
-		if statusMsg.Title == "Import failed" || statusMsg.Title == "Download failed" {
+		title := strings.ToLower(statusMsg.Title)
+		// Check for specific failure titles
+		if title == "import failed" || title == "download failed" {
 			return true
 		}
+		// Exclude "download warning" which is used for stalled downloads
+		if title == "download warning" {
+			continue
+		}
+		// Check messages for import-specific failures
 		for _, msg := range statusMsg.Messages {
-			if contains(msg, "import", "failed", "error") {
+			// Look for import/parsing specific errors, not connection/stall issues
+			if contains(msg, "import", "parsing", "unable to parse", "cannot import", "failed to import") {
+				// But exclude stalled/connection messages
+				if !contains(msg, "stalled", "no connections", "connection", "timeout") {
+					return true
+				}
+			}
+		}
+	}
+
+	// Check ErrorMessage field - but only if it's about import/parsing, not connection issues
+	if item.ErrorMessage != "" {
+		// Only treat as import failure if it's about import/parsing, not connection/stall
+		if contains(item.ErrorMessage, "import", "parsing", "unable to parse", "cannot import", "failed to import") {
+			if !contains(item.ErrorMessage, "stalled", "no connections", "connection", "timeout") {
 				return true
 			}
 		}
@@ -183,9 +302,9 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 		// Build map of download IDs (hashes) to queue items
 		itemsWithoutHash := 0
 		for i := range queue.Records {
-			item := &queue.Records[i]
+			item := queue.Records[i]
 			if item.DownloadID != "" {
-				// DownloadID in Sonarr is typically the torrent hash
+				// DownloadID in *arr apps is typically the torrent hash
 				hash := item.DownloadID
 				arrQueueMap[hash] = append(arrQueueMap[hash], arrQueueItem{
 					arrID: arrID,
