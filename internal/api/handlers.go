@@ -79,13 +79,13 @@ func (h *Handler) GetStatus(w http.ResponseWriter, r *http.Request) {
 	// Count enabled clients
 	qbtEnabled := 0
 	sonarrEnabled := 0
-	for _, qbt := range h.config.QBittorrent {
-		if qbt.Enabled {
+	for _, client := range h.config.BittorrentClients {
+		if client.Enabled && client.Kind == "qbittorrent" {
 			qbtEnabled++
 		}
 	}
-	for _, sonarr := range h.config.Sonarr {
-		if sonarr.Enabled {
+	for _, arr := range h.config.Arrs {
+		if arr.Enabled && arr.Kind == "sonarr" {
 			sonarrEnabled++
 		}
 	}
@@ -94,11 +94,11 @@ func (h *Handler) GetStatus(w http.ResponseWriter, r *http.Request) {
 		"jobs": jobs,
 		"clients": map[string]interface{}{
 			"qbittorrent": map[string]interface{}{
-				"count":   len(h.config.QBittorrent),
+				"count":   qbtEnabled,
 				"enabled": qbtEnabled,
 			},
 			"sonarr": map[string]interface{}{
-				"count":   len(h.config.Sonarr),
+				"count":   sonarrEnabled,
 				"enabled": sonarrEnabled,
 			},
 		},
@@ -138,6 +138,17 @@ func (h *Handler) RunDownloadCleaner(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.scheduler.RunJobNow(id); err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// RunMalwareBlocker runs the malware blocker manually
+func (h *Handler) RunMalwareBlocker(w http.ResponseWriter, r *http.Request) {
+	if err := h.scheduler.RunJobNow("malware-blocker"); err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}

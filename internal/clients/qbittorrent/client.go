@@ -361,3 +361,43 @@ func (c *Client) SetFilePriority(hash string, fileIndices []int, priority int) e
 
 	return nil
 }
+
+// PauseTorrent pauses torrents in qBittorrent
+func (c *Client) PauseTorrent(hashes []string) error {
+	if err := c.ensureLoggedIn(); err != nil {
+		return err
+	}
+
+	pauseURL := fmt.Sprintf("%s/api/v2/torrents/pause", c.url)
+
+	data := url.Values{}
+	data.Set("hashes", strings.Join(hashes, "|"))
+
+	req, err := http.NewRequest("POST", pauseURL, strings.NewReader(data.Encode()))
+	if err != nil {
+		return fmt.Errorf("creating request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("making request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusForbidden {
+		c.loggedIn = false
+		if err := c.Login(); err != nil {
+			return fmt.Errorf("re-authenticating: %w", err)
+		}
+		return c.PauseTorrent(hashes)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}

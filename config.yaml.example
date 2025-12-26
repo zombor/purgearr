@@ -2,15 +2,17 @@ server:
   host: "0.0.0.0"
   port: 8080
 
-sonarr:
-  - id: "main"
+arrs:
+  - kind: "sonarr"
+    id: "main"
     name: "Main Sonarr"
     url: "http://localhost:8989"
     api_key: "your-sonarr-api-key"
     enabled: true
 
-qbittorrent:
-  - id: "main"
+bittorrent_clients:
+  - kind: "qbittorrent"
+    id: "main"
     name: "Main qBittorrent"
     url: "http://localhost:8080"
     username: "admin"
@@ -20,7 +22,10 @@ qbittorrent:
 trackers:
   - id: "tleechreload"
     name: "TLeechReload"
-    url_regex: "tracker\\.tleechreload\\.org"
+    url_regex: "tracker\.(tleechreload|torrentleech)\.org"
+    min_progress: 0.0  # Minimum progress percentage (0-100) before allowing deletion from bittorrent client
+    min_ratio: 1.0  # Minimum ratio that must be met before deletion is allowed (e.g., 1.0 for 1:1)
+    min_seeding_time: "7d"  # Minimum seeding time that must be met before deletion is allowed
     enabled: true
 
 malware_blocker:
@@ -49,14 +54,20 @@ queue_cleaners:
     enabled: true
     dry_run: false
     schedule: "every 1h"
-    clients:
-      bittorrent: ["main"]  # Array of bittorrent client IDs (empty = use all enabled)
-      arr: ["main"]          # Array of *arr app IDs (empty = use all enabled, or none if not needed)
-    max_age: "24h"
-    min_speed: 1048576
-    remove_failed: true
-    remove_stalled: true
-    remove_slow: true
+    bittorrent: ["main"]  # Array of bittorrent client IDs (empty = use all enabled)
+    arrs: ["main"]        # Array of *arr app IDs (empty = use all enabled)
+    stalled:
+      strikes: 3              # Number of times the check can fail before action
+      reset_on_progress: true # Reset strikes when progress is made
+      delete: true            # Delete from bittorrent client
+    slow:
+      strikes: 3              # Number of times the check can fail before action
+      reset_on_progress: true # Reset strikes when progress is made
+      delete: true            # Delete from bittorrent client
+      min_speed: "1MiB"      # Minimum speed (e.g., "1MiB", "1MB", "1024KB") - required for slow config
+    failed_import:
+      strikes: 1              # Number of times the check can fail before action
+      delete: true            # Delete from bittorrent client
     trackers:
       tracker_ids: []  # Array of tracker IDs (empty = no filtering)
       filter_mode: ""   # "include" or "exclude"
@@ -69,12 +80,10 @@ download_cleaners:
     schedule: "every 6h"
     clients:
       bittorrent: ["main"]  # Array of bittorrent client IDs (empty = use all enabled)
-      arr: []                # Array of *arr app IDs (empty = use all enabled, or none if not needed)
-    max_ratio: 2.0
-    min_seeding_time: "7d"
-    max_seeding_time: ""
+      # Note: Download cleaners don't use arr clients (they work on completed torrents)
     trackers:
       tracker_ids: []  # Array of tracker IDs (empty = no filtering)
       filter_mode: ""   # "include" or "exclude"
-
-
+    max_ratio: 5.0  # Maximum ratio - clean when reached (if tracker min requirements met)
+    max_seeding_time: "30d"  # Maximum seeding time - clean when reached (if tracker min requirements met)
+    delete_files: false  # If true, delete files along with torrents (default: false)

@@ -109,14 +109,20 @@
 
         <div class="section">
             <h2>Queue Cleaners</h2>
-            <button onclick="runQueueCleaner('default')">Run All</button>
+            <button onclick="loadCleaners()">Refresh</button>
             <div id="queue-cleaners"></div>
         </div>
 
         <div class="section">
             <h2>Download Cleaners</h2>
-            <button onclick="runDownloadCleaner('default')">Run All</button>
+            <button onclick="loadCleaners()">Refresh</button>
             <div id="download-cleaners"></div>
+        </div>
+
+        <div class="section">
+            <h2>Malware Blocker</h2>
+            <button onclick="runMalwareBlocker()">Run Now</button>
+            <div id="malware-blocker"></div>
         </div>
 
         <div class="section">
@@ -160,6 +166,7 @@
                 await apiCall(`/cleaners/queue/${id}/run`, 'POST');
                 document.getElementById('queue-cleaners').innerHTML = 
                     `<div class="status success">Queue cleaner '${id}' executed successfully</div>`;
+                setTimeout(loadCleaners, 1000);
             } catch (error) {
                 document.getElementById('queue-cleaners').innerHTML = 
                     `<div class="status error">Error: ${error.message}</div>`;
@@ -171,8 +178,132 @@
                 await apiCall(`/cleaners/download/${id}/run`, 'POST');
                 document.getElementById('download-cleaners').innerHTML = 
                     `<div class="status success">Download cleaner '${id}' executed successfully</div>`;
+                setTimeout(loadCleaners, 1000);
             } catch (error) {
                 document.getElementById('download-cleaners').innerHTML = 
+                    `<div class="status error">Error: ${error.message}</div>`;
+            }
+        }
+
+        async function runMalwareBlocker() {
+            try {
+                await apiCall('/cleaners/malware-blocker/run', 'POST');
+                document.getElementById('malware-blocker').innerHTML = 
+                    `<div class="status success">Malware blocker executed successfully</div>`;
+                setTimeout(loadCleaners, 1000);
+            } catch (error) {
+                document.getElementById('malware-blocker').innerHTML = 
+                    `<div class="status error">Error: ${error.message}</div>`;
+            }
+        }
+
+        async function loadCleaners() {
+            try {
+                const [status, config] = await Promise.all([
+                    apiCall('/status'),
+                    apiCall('/config')
+                ]);
+                const jobs = status.jobs || {};
+                
+                // Build sets of cleaner IDs from config
+                const queueCleanerIds = new Set();
+                const downloadCleanerIds = new Set();
+                
+                if (config.queue_cleaners) {
+                    config.queue_cleaners.forEach(qc => {
+                        if (qc.enabled && qc.id) {
+                            queueCleanerIds.add(qc.id);
+                        }
+                    });
+                }
+                
+                if (config.download_cleaners) {
+                    config.download_cleaners.forEach(dc => {
+                        if (dc.enabled && dc.id) {
+                            downloadCleanerIds.add(dc.id);
+                        }
+                    });
+                }
+                
+                // Display queue cleaners
+                const queueCleaners = [];
+                const downloadCleaners = [];
+                
+                for (const [id, job] of Object.entries(jobs)) {
+                    const jobData = job;
+                    const jobName = jobData.name || id;
+                    
+                    // Skip malware blocker
+                    if (id === 'malware-blocker') {
+                        continue;
+                    }
+                    
+                    // Check if it's a queue cleaner
+                    if (queueCleanerIds.has(id)) {
+                        const jobItem = `
+                            <div class="job-item">
+                                <div class="job-info">
+                                    <div class="job-name">${jobName}</div>
+                                    <div class="job-details">
+                                        Schedule: ${jobData.schedule || 'N/A'} | 
+                                        Last Run: ${jobData.last_run ? new Date(jobData.last_run).toLocaleString() : 'Never'} | 
+                                        Next Run: ${jobData.next_run ? new Date(jobData.next_run).toLocaleString() : 'N/A'}
+                                    </div>
+                                </div>
+                                <button onclick="runQueueCleaner('${id}')">Run</button>
+                            </div>
+                        `;
+                        queueCleaners.push(jobItem);
+                    }
+                    // Check if it's a download cleaner
+                    else if (downloadCleanerIds.has(id)) {
+                        const jobItem = `
+                            <div class="job-item">
+                                <div class="job-info">
+                                    <div class="job-name">${jobName}</div>
+                                    <div class="job-details">
+                                        Schedule: ${jobData.schedule || 'N/A'} | 
+                                        Last Run: ${jobData.last_run ? new Date(jobData.last_run).toLocaleString() : 'Never'} | 
+                                        Next Run: ${jobData.next_run ? new Date(jobData.next_run).toLocaleString() : 'N/A'}
+                                    </div>
+                                </div>
+                                <button onclick="runDownloadCleaner('${id}')">Run</button>
+                            </div>
+                        `;
+                        downloadCleaners.push(jobItem);
+                    }
+                }
+                
+                document.getElementById('queue-cleaners').innerHTML = 
+                    queueCleaners.length > 0 ? queueCleaners.join('') : '<div class="status">No queue cleaners configured</div>';
+                document.getElementById('download-cleaners').innerHTML = 
+                    downloadCleaners.length > 0 ? downloadCleaners.join('') : '<div class="status">No download cleaners configured</div>';
+                
+                // Display malware blocker
+                const malwareBlockerJob = jobs['malware-blocker'];
+                if (malwareBlockerJob) {
+                    document.getElementById('malware-blocker').innerHTML = `
+                        <div class="job-item">
+                            <div class="job-info">
+                                <div class="job-name">${malwareBlockerJob.name || 'Malware Blocker'}</div>
+                                <div class="job-details">
+                                    Schedule: ${malwareBlockerJob.schedule || 'N/A'} | 
+                                    Last Run: ${malwareBlockerJob.last_run ? new Date(malwareBlockerJob.last_run).toLocaleString() : 'Never'} | 
+                                    Next Run: ${malwareBlockerJob.next_run ? new Date(malwareBlockerJob.next_run).toLocaleString() : 'N/A'}
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    document.getElementById('malware-blocker').innerHTML = 
+                        '<div class="status">Malware blocker not configured</div>';
+                }
+            } catch (error) {
+                document.getElementById('queue-cleaners').innerHTML = 
+                    `<div class="status error">Error: ${error.message}</div>`;
+                document.getElementById('download-cleaners').innerHTML = 
+                    `<div class="status error">Error: ${error.message}</div>`;
+                document.getElementById('malware-blocker').innerHTML = 
                     `<div class="status error">Error: ${error.message}</div>`;
             }
         }
@@ -207,8 +338,9 @@
             }
         }
 
-        // Load status on page load
+        // Load status and cleaners on page load
         loadStatus();
+        loadCleaners();
     </script>
 </body>
 </html>
