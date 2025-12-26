@@ -38,8 +38,9 @@ type torrentStrikes struct {
 type Cleaner struct {
 	config     config.QueueCleanerConfig
 	qbtClient  *qbittorrent.Client
-	arrClients map[string]ArrClient   // Map of arr app ID to client
-	trackers   []config.TrackerConfig // Tracker configurations for filtering
+	arrClients map[string]ArrClient        // Map of arr app ID to client
+	arrConfigs map[string]config.ArrConfig // Map of arr app ID to config (for removal options)
+	trackers   []config.TrackerConfig      // Tracker configurations for filtering
 	logger     *slog.Logger
 	strikes    map[string]*torrentStrikes // Map of torrent hash to strikes
 	strikesMu  sync.RWMutex               // Mutex for thread-safe access to strikes map
@@ -76,11 +77,12 @@ func (c *Cleaner) isArrConfigured(arrID string) bool {
 }
 
 // NewCleaner creates a new queue cleaner
-func NewCleaner(cfg config.QueueCleanerConfig, qbtClient *qbittorrent.Client, arrClients map[string]ArrClient, trackers []config.TrackerConfig, logger *slog.Logger) *Cleaner {
+func NewCleaner(cfg config.QueueCleanerConfig, qbtClient *qbittorrent.Client, arrClients map[string]ArrClient, arrConfigs map[string]config.ArrConfig, trackers []config.TrackerConfig, logger *slog.Logger) *Cleaner {
 	return &Cleaner{
 		config:     cfg,
 		qbtClient:  qbtClient,
 		arrClients: arrClients,
+		arrConfigs: arrConfigs,
 		trackers:   trackers,
 		logger:     logger,
 		strikes:    make(map[string]*torrentStrikes),
@@ -179,6 +181,7 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 		}
 
 		// Build map of download IDs (hashes) to queue items
+		itemsWithoutHash := 0
 		for i := range queue.Records {
 			item := &queue.Records[i]
 			if item.DownloadID != "" {
@@ -189,7 +192,12 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 					item:  item,
 				})
 				totalQueueItems++
+			} else {
+				itemsWithoutHash++
 			}
+		}
+		if itemsWithoutHash > 0 {
+			c.logger.Debug("Queue items without DownloadID (hash)", "arr_id", arrID, "count", itemsWithoutHash)
 		}
 	}
 
@@ -205,19 +213,37 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 	}
 
 	// Build map of hash to torrent for quick lookup
+	// Use lowercase for case-insensitive matching (qBittorrent uses lowercase, Sonarr might use uppercase)
 	torrentMap := make(map[string]*qbittorrent.Torrent)
+	torrentMapLower := make(map[string]*qbittorrent.Torrent) // Lowercase hash -> torrent for case-insensitive lookup
 	for i := range torrents {
-		torrentMap[torrents[i].Hash] = &torrents[i]
+		hash := torrents[i].Hash
+		torrentMap[hash] = &torrents[i]
+		torrentMapLower[strings.ToLower(hash)] = &torrents[i]
 	}
 
 	trackerIDs := make([]string, len(c.trackers))
 	for i, t := range c.trackers {
 		trackerIDs[i] = t.ID
 	}
-	c.logger.Info("Starting queue cleaner run", "cleaner", c.config.Name, "total_queue_items", totalQueueItems, "configured_trackers", trackerIDs, "filter_mode", c.config.Trackers.FilterMode, "tracker_ids_from_config", c.config.Trackers.TrackerIDs)
+	c.logger.Info("Starting queue cleaner run", "cleaner", c.config.Name, "total_queue_items", totalQueueItems, "unique_hashes_from_arr", len(arrQueueMap), "configured_trackers", trackerIDs, "filter_mode", c.config.Trackers.FilterMode, "tracker_ids_from_config", c.config.Trackers.TrackerIDs, "qbittorrent_torrents", len(torrentMap))
+
+	// Log sample hashes for debugging
+	sampleHashes := make([]string, 0, 5)
+	for hash := range arrQueueMap {
+		if len(sampleHashes) < 5 {
+			sampleHashes = append(sampleHashes, hash)
+		}
+	}
+	if len(sampleHashes) > 0 {
+		c.logger.Debug("Sample queue item hashes from arr", "hashes", sampleHashes)
+	}
 
 	// Track which torrents should be removed from *arr apps
 	hashesToRemoveFromArr := make(map[string]bool)
+	// Track which torrents should be deleted from bittorrent client
+	// Map of hash -> reason for deletion
+	hashesToDeleteFromClient := make(map[string]string)
 
 	queueItemsProcessed := 0
 	queueItemsFilteredOut := 0
@@ -227,11 +253,16 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 	// Iterate over queue items from *arr apps (source of truth)
 	for hash, queueItems := range arrQueueMap {
 		// Find the corresponding torrent in qBittorrent
+		// Try exact match first, then case-insensitive match
 		torrent, exists := torrentMap[hash]
 		if !exists {
-			c.logger.Debug("Queue item has no corresponding torrent in bittorrent client", "hash", hash, "title", queueItems[0].item.Title)
-			queueItemsFilteredOut++
-			continue
+			// Try case-insensitive match (Sonarr might return uppercase, qBittorrent uses lowercase)
+			torrent, exists = torrentMapLower[strings.ToLower(hash)]
+			if !exists {
+				c.logger.Info("Queue item has no corresponding torrent in bittorrent client", "hash", hash, "hash_lower", strings.ToLower(hash), "title", queueItems[0].item.Title, "total_torrents_in_client", len(torrentMap))
+				queueItemsFilteredOut++
+				continue
+			}
 		}
 
 		// Only process torrents that are downloading or stalled (not completed/seeding)
@@ -243,12 +274,28 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 			continue
 		}
 
+		// Log all torrents being checked for debugging (especially slow ones)
+		// Always log speed for stalledDL torrents since they might still be downloading slowly
+		if torrent.State == "stalledDL" || (torrent.Dlspeed > 0 && torrent.Dlspeed < 200000) {
+			c.logger.Info("Checking queue item (potential slow/stalled download)", "torrent", torrent.Name, "state", torrent.State, "tracker", torrent.Tracker, "speed", torrent.Dlspeed, "progress", torrent.Progress, "hash", hash, "downloaded_session", torrent.DownloadedSession)
+		} else {
+			c.logger.Debug("Checking queue item", "torrent", torrent.Name, "state", torrent.State, "tracker", torrent.Tracker, "speed", torrent.Dlspeed, "progress", torrent.Progress)
+		}
+
 		// Collect sample states for debugging
 		stalledStatesSeen[torrent.State]++
 
 		// Check tracker filter
 		if !c.matchesTrackerFilter(torrent.Tracker) {
 			queueItemsFilteredOut++
+
+			// Log why torrents are being filtered out (especially slow/stalled ones)
+			// Use INFO level for slow downloads so we can see what's happening
+			if torrent.Dlspeed > 0 && torrent.Dlspeed < 200000 {
+				c.logger.Info("Torrent filtered out by tracker (slow download)", "torrent", torrent.Name, "state", torrent.State, "tracker_url", torrent.Tracker, "filter_mode", c.config.Trackers.FilterMode, "configured_tracker_ids", c.config.Trackers.TrackerIDs, "speed", torrent.Dlspeed, "progress", torrent.Progress)
+			} else {
+				c.logger.Debug("Torrent filtered out by tracker", "torrent", torrent.Name, "state", torrent.State, "tracker_url", torrent.Tracker, "filter_mode", c.config.Trackers.FilterMode, "configured_tracker_ids", c.config.Trackers.TrackerIDs, "speed", torrent.Dlspeed, "progress", torrent.Progress)
+			}
 
 			// Special logging for stalled torrents that are being filtered out
 			if torrent.State == "stalledDL" || torrent.State == "stalledUP" || strings.HasPrefix(strings.ToLower(torrent.State), "stalled") {
@@ -261,10 +308,19 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 			}
 			continue
 		}
+
+		// Log when torrent passes tracker filter (especially for slow downloads)
+		if torrent.Dlspeed > 0 && torrent.Dlspeed < 102400 { // Less than 100KiB
+			c.logger.Debug("Torrent passed tracker filter (slow download candidate)", "torrent", torrent.Name, "state", torrent.State, "tracker_url", torrent.Tracker, "speed", torrent.Dlspeed, "progress", torrent.Progress)
+		}
+
 		queueItemsProcessed++
 
 		// Get or create strike tracking for this torrent
-		strikes := c.getOrCreateStrikes(torrent.Hash)
+		// Use normalized hash (lowercase) for consistent key lookup
+		// The hash from arrQueueMap (Sonarr) might be uppercase, while torrent.Hash (qBittorrent) is lowercase
+		normalizedHash := strings.ToLower(hash)
+		strikes := c.getOrCreateStrikes(normalizedHash)
 
 		// Check for stalled status
 		if c.config.Stalled != nil {
@@ -310,36 +366,75 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 				hashesToRemoveFromArr[hash] = true
 				c.logger.Info("Torrent marked for removal from arr (stalled)", "cleaner", c.config.Name, "torrent", torrent.Name, "strikes", strikes.stalledStrikes)
 				result.RemovedItems = append(result.RemovedItems, fmt.Sprintf("%s (stalled, %d strikes)", torrent.Name, strikes.stalledStrikes))
+
+				// Check if should delete from bittorrent client
+				shouldDelete := c.config.Stalled.DeleteTorrent
+				if !shouldDelete {
+					// Check if tracker allows safe deletion below progress threshold
+					trackerConfig := c.findTrackerConfig(torrent.Tracker)
+					if trackerConfig != nil && trackerConfig.SafeDeleteProgress > 0 {
+						// Progress is stored as 0.0-1.0, convert to percentage for comparison
+						progressPercent := torrent.Progress * 100
+						if progressPercent < trackerConfig.SafeDeleteProgress {
+							shouldDelete = true
+							c.logger.Info("Torrent marked for deletion due to safe_delete_progress threshold",
+								"cleaner", c.config.Name,
+								"torrent", torrent.Name,
+								"progress", progressPercent,
+								"safe_delete_progress", trackerConfig.SafeDeleteProgress,
+								"tracker", trackerConfig.Name)
+						}
+					}
+				}
+				if shouldDelete {
+					hashesToDeleteFromClient[hash] = fmt.Sprintf("stalled (%d strikes)", strikes.stalledStrikes)
+				}
 			}
 		}
 
 		// Check for slow download
-		if c.config.Slow != nil && torrent.State == "downloading" && c.config.Slow.MinSpeed.Bytes() > 0 {
+		// Check any torrent that is downloading (not completed) and has download speed > 0
+		// This includes "downloading" state and "stalledDL" state (stalled but still downloading)
+		isDownloading := torrent.Progress < 1.0 && torrent.Dlspeed > 0
+		if c.config.Slow != nil && isDownloading && c.config.Slow.MinSpeed.Bytes() > 0 {
 			isSlow := torrent.Dlspeed < c.config.Slow.MinSpeed.Bytes()
 
+			// Always log speed info for stalledDL/downloading torrents to debug
+			if torrent.State == "stalledDL" || torrent.State == "downloading" {
+				c.logger.Info("Checking slow download", "torrent", torrent.Name, "state", torrent.State, "speed", torrent.Dlspeed, "min_speed", c.config.Slow.MinSpeed.Bytes(), "progress", torrent.Progress, "is_slow", isSlow)
+			} else if isSlow {
+				c.logger.Info("Checking slow download", "torrent", torrent.Name, "state", torrent.State, "speed", torrent.Dlspeed, "min_speed", c.config.Slow.MinSpeed.Bytes(), "progress", torrent.Progress)
+			}
+
 			if isSlow {
-				// Check if progress was made (reset strikes if reset_on_progress is enabled)
-				if c.config.Slow.ResetOnProgress && torrent.Progress > strikes.lastProgress {
+				// For slow downloads, reset_on_progress means: reset strikes if speed improves above threshold
+				// (i.e., torrent is no longer slow), not just if any progress is made
+				// If speed is still below threshold, accumulate strikes even if progress is made
+				c.strikesMu.Lock()
+				strikes.slowStrikes++
+				currentStrikes := strikes.slowStrikes
+				c.strikesMu.Unlock()
+				c.logger.Info("Incremented slow strikes", "cleaner", c.config.Name, "torrent", torrent.Name, "strikes", currentStrikes, "threshold", c.config.Slow.Strikes, "speed", torrent.Dlspeed, "min_speed", c.config.Slow.MinSpeed.Bytes(), "progress", torrent.Progress)
+			} else {
+				// Not slow (speed is above threshold), reset strikes
+				// If reset_on_progress is enabled, also update last progress to track recovery
+				if c.config.Slow.ResetOnProgress {
 					c.strikesMu.Lock()
+					oldStrikes := strikes.slowStrikes
 					strikes.slowStrikes = 0
 					strikes.lastProgress = torrent.Progress
 					c.strikesMu.Unlock()
-					c.logger.Debug("Reset slow strikes due to progress", "torrent", torrent.Name, "progress", torrent.Progress)
+					if oldStrikes > 0 {
+						c.logger.Info("Reset slow strikes - speed improved above threshold", "cleaner", c.config.Name, "torrent", torrent.Name, "old_strikes", oldStrikes, "speed", torrent.Dlspeed, "min_speed", c.config.Slow.MinSpeed.Bytes())
+					}
 				} else {
 					c.strikesMu.Lock()
-					strikes.slowStrikes++
-					currentStrikes := strikes.slowStrikes
+					strikes.slowStrikes = 0
 					c.strikesMu.Unlock()
-					c.logger.Info("Incremented slow strikes", "cleaner", c.config.Name, "torrent", torrent.Name, "strikes", currentStrikes, "threshold", c.config.Slow.Strikes, "speed", torrent.Dlspeed, "min_speed", c.config.Slow.MinSpeed.Bytes())
 				}
-			} else {
-				// Not slow, reset strikes
-				c.strikesMu.Lock()
-				strikes.slowStrikes = 0
-				c.strikesMu.Unlock()
 			}
 
-			// Update last progress
+			// Update last progress for tracking (used by stalled check, not slow check)
 			c.strikesMu.Lock()
 			strikes.lastProgress = torrent.Progress
 			c.strikesMu.Unlock()
@@ -348,6 +443,29 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 				hashesToRemoveFromArr[hash] = true
 				c.logger.Info("Torrent marked for removal from arr (slow)", "cleaner", c.config.Name, "torrent", torrent.Name, "strikes", strikes.slowStrikes, "speed", torrent.Dlspeed)
 				result.RemovedItems = append(result.RemovedItems, fmt.Sprintf("%s (slow, %d strikes, %d bytes/s)", torrent.Name, strikes.slowStrikes, torrent.Dlspeed))
+
+				// Check if should delete from bittorrent client
+				shouldDelete := c.config.Slow.DeleteTorrent
+				if !shouldDelete {
+					// Check if tracker allows safe deletion below progress threshold
+					trackerConfig := c.findTrackerConfig(torrent.Tracker)
+					if trackerConfig != nil && trackerConfig.SafeDeleteProgress > 0 {
+						// Progress is stored as 0.0-1.0, convert to percentage for comparison
+						progressPercent := torrent.Progress * 100
+						if progressPercent < trackerConfig.SafeDeleteProgress {
+							shouldDelete = true
+							c.logger.Info("Torrent marked for deletion due to safe_delete_progress threshold",
+								"cleaner", c.config.Name,
+								"torrent", torrent.Name,
+								"progress", progressPercent,
+								"safe_delete_progress", trackerConfig.SafeDeleteProgress,
+								"tracker", trackerConfig.Name)
+						}
+					}
+				}
+				if shouldDelete {
+					hashesToDeleteFromClient[hash] = fmt.Sprintf("slow (%d strikes)", strikes.slowStrikes)
+				}
 			}
 		}
 
@@ -378,6 +496,29 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 				hashesToRemoveFromArr[hash] = true
 				c.logger.Info("Torrent marked for removal from arr (failed import)", "cleaner", c.config.Name, "torrent", torrent.Name, "strikes", strikes.failedImportStrikes)
 				result.RemovedItems = append(result.RemovedItems, fmt.Sprintf("%s (failed import, %d strikes)", torrent.Name, strikes.failedImportStrikes))
+
+				// Check if should delete from bittorrent client
+				shouldDelete := c.config.FailedImport.DeleteTorrent
+				if !shouldDelete {
+					// Check if tracker allows safe deletion below progress threshold
+					trackerConfig := c.findTrackerConfig(torrent.Tracker)
+					if trackerConfig != nil && trackerConfig.SafeDeleteProgress > 0 {
+						// Progress is stored as 0.0-1.0, convert to percentage for comparison
+						progressPercent := torrent.Progress * 100
+						if progressPercent < trackerConfig.SafeDeleteProgress {
+							shouldDelete = true
+							c.logger.Info("Torrent marked for deletion due to safe_delete_progress threshold",
+								"cleaner", c.config.Name,
+								"torrent", torrent.Name,
+								"progress", progressPercent,
+								"safe_delete_progress", trackerConfig.SafeDeleteProgress,
+								"tracker", trackerConfig.Name)
+						}
+					}
+				}
+				if shouldDelete {
+					hashesToDeleteFromClient[hash] = fmt.Sprintf("failed import (%d strikes)", strikes.failedImportStrikes)
+				}
 			}
 		}
 	}
@@ -391,15 +532,20 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 	}
 
 	// Clean up strikes for queue items that no longer exist
+	// Use normalized hashes for comparison
 	c.strikesMu.Lock()
+	normalizedArrHashes := make(map[string]bool)
+	for hash := range arrQueueMap {
+		normalizedArrHashes[strings.ToLower(hash)] = true
+	}
 	for hash := range c.strikes {
-		if _, exists := arrQueueMap[hash]; !exists {
+		if !normalizedArrHashes[hash] {
 			delete(c.strikes, hash)
 		}
 	}
 	c.strikesMu.Unlock()
 
-	// Remove from *arr apps (only action for queue cleaner - never touches bittorrent client)
+	// Remove from *arr apps
 	arrRemovedCount := 0
 	for hash := range hashesToRemoveFromArr {
 		if queueItems, ok := arrQueueMap[hash]; ok {
@@ -409,18 +555,27 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 					continue
 				}
 
+				// Get removal options from arr config
+				arrConfig, hasConfig := c.arrConfigs[qItem.arrID]
+				removeFromClient := false
+				blocklist := false
+				if hasConfig {
+					removeFromClient = arrConfig.RemoveFromClient
+					blocklist = arrConfig.Blocklist
+				}
+
 				if c.config.DryRun {
-					c.logger.Info("DRY RUN - Would remove item from arr queue", "cleaner", c.config.Name, "item", qItem.item.Title, "item_id", qItem.item.ID, "arr_id", qItem.arrID)
+					c.logger.Info("DRY RUN - Would remove item from arr queue", "cleaner", c.config.Name, "item", qItem.item.Title, "item_id", qItem.item.ID, "arr_id", qItem.arrID, "remove_from_client", removeFromClient, "blocklist", blocklist)
 				} else {
 					arrClient := c.arrClients[qItem.arrID]
 					if arrClient != nil {
-						// Queue cleaner never removes from bittorrent client - only from arr app
-						if err := arrClient.RemoveFromQueue(qItem.item.ID, false, false); err != nil {
+						// Use removal options from arr config
+						if err := arrClient.RemoveFromQueue(qItem.item.ID, removeFromClient, blocklist); err != nil {
 							c.logger.Warn("Failed to remove item from arr queue", "cleaner", c.config.Name, "item_id", qItem.item.ID, "arr_id", qItem.arrID, "error", err)
 							result.Errors = append(result.Errors, fmt.Sprintf("failed to remove from %s queue: %v", qItem.arrID, err))
 						} else {
 							arrRemovedCount++
-							c.logger.Info("Removed item from arr queue", "cleaner", c.config.Name, "item", qItem.item.Title, "item_id", qItem.item.ID, "arr_id", qItem.arrID)
+							c.logger.Info("Removed item from arr queue", "cleaner", c.config.Name, "item", qItem.item.Title, "item_id", qItem.item.ID, "arr_id", qItem.arrID, "remove_from_client", removeFromClient, "blocklist", blocklist)
 						}
 					}
 				}
@@ -429,19 +584,72 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 	}
 	result.RemovedCount = arrRemovedCount
 
+	// Delete from bittorrent client if configured
+	if len(hashesToDeleteFromClient) > 0 {
+		hashesToDelete := make([]string, 0, len(hashesToDeleteFromClient))
+		for hash := range hashesToDeleteFromClient {
+			hashesToDelete = append(hashesToDelete, hash)
+		}
+
+		if c.config.DryRun {
+			for hash, reason := range hashesToDeleteFromClient {
+				torrentName := hash
+				if torrent, exists := torrentMap[hash]; exists {
+					torrentName = torrent.Name
+				} else if torrent, exists := torrentMapLower[strings.ToLower(hash)]; exists {
+					torrentName = torrent.Name
+				}
+				c.logger.Info("DRY RUN - Would delete torrent from bittorrent client", "cleaner", c.config.Name, "torrent", torrentName, "hash", hash, "reason", reason)
+			}
+		} else {
+			// Delete torrents from bittorrent client (without deleting files)
+			if err := c.qbtClient.DeleteTorrent(hashesToDelete, false); err != nil {
+				c.logger.Warn("Failed to delete torrents from bittorrent client", "cleaner", c.config.Name, "error", err)
+				result.Errors = append(result.Errors, fmt.Sprintf("failed to delete from bittorrent client: %v", err))
+			} else {
+				for hash, reason := range hashesToDeleteFromClient {
+					torrentName := hash
+					if torrent, exists := torrentMap[hash]; exists {
+						torrentName = torrent.Name
+					} else if torrent, exists := torrentMapLower[strings.ToLower(hash)]; exists {
+						torrentName = torrent.Name
+					}
+					c.logger.Info("Deleted torrent from bittorrent client", "cleaner", c.config.Name, "torrent", torrentName, "hash", hash, "reason", reason)
+				}
+			}
+		}
+	}
+
 	return result, nil
 }
 
 // matchesTrackerFilter checks if a tracker URL matches the configured tracker filters
 func (c *Cleaner) matchesTrackerFilter(trackerURL string) bool {
-	// If no trackers configured, match all
+	// If no trackers configured or no tracker IDs specified, match all
 	if len(c.trackers) == 0 || len(c.config.Trackers.TrackerIDs) == 0 {
 		return true
 	}
 
+	// If filter_mode is empty, no filtering
+	if c.config.Trackers.FilterMode == "" {
+		return true
+	}
+
+	// Build a map of configured tracker IDs for quick lookup
+	configuredTrackerIDs := make(map[string]bool)
+	for _, id := range c.config.Trackers.TrackerIDs {
+		configuredTrackerIDs[id] = true
+	}
+
 	// Check if tracker URL matches any of the configured tracker regex patterns
+	// Only check trackers that are in the configured tracker IDs list
 	matches := false
 	for _, tracker := range c.trackers {
+		// Only check trackers that are in the configured list
+		if !configuredTrackerIDs[tracker.ID] {
+			continue
+		}
+
 		// Compile regex once for case-insensitive matching
 		fullPattern := "(?i)" + tracker.URLRegex
 		re, err := regexp.Compile(fullPattern)
@@ -452,7 +660,10 @@ func (c *Cleaner) matchesTrackerFilter(trackerURL string) bool {
 		matched := re.MatchString(trackerURL)
 		if matched {
 			matches = true
+			c.logger.Debug("Tracker URL matched", "tracker_url", trackerURL, "tracker_id", tracker.ID, "tracker_name", tracker.Name, "pattern", tracker.URLRegex)
 			break
+		} else {
+			c.logger.Debug("Tracker URL did not match", "tracker_url", trackerURL, "tracker_id", tracker.ID, "pattern", tracker.URLRegex)
 		}
 	}
 

@@ -82,7 +82,7 @@ func (ds *DataSize) UnmarshalYAML(value *yaml.Node) error {
 		*ds = DataSize(0)
 		return nil
 	}
-	
+
 	// Parse human-readable size (e.g., "1MiB", "1MB", "1024KB")
 	size, err := parseDataSize(s)
 	if err != nil {
@@ -104,14 +104,14 @@ func parseDataSize(s string) (int64, error) {
 	if s == "" {
 		return 0, nil
 	}
-	
+
 	// Remove any spaces and convert to lowercase for matching
 	sLower := strings.ToLower(s)
-	
+
 	// Try to find the unit
 	var multiplier int64 = 1
 	var numStr string
-	
+
 	// Binary units (KiB, MiB, GiB, TiB, PiB)
 	binaryUnits := map[string]int64{
 		"kib": 1024,
@@ -120,7 +120,7 @@ func parseDataSize(s string) (int64, error) {
 		"tib": 1024 * 1024 * 1024 * 1024,
 		"pib": 1024 * 1024 * 1024 * 1024 * 1024,
 	}
-	
+
 	// Decimal units (KB, MB, GB, TB, PB)
 	decimalUnits := map[string]int64{
 		"kb": 1000,
@@ -129,7 +129,7 @@ func parseDataSize(s string) (int64, error) {
 		"tb": 1000 * 1000 * 1000 * 1000,
 		"pb": 1000 * 1000 * 1000 * 1000 * 1000,
 	}
-	
+
 	// Check for binary units first (more common in torrenting)
 	for unit, mult := range binaryUnits {
 		if strings.HasSuffix(sLower, unit) {
@@ -138,7 +138,7 @@ func parseDataSize(s string) (int64, error) {
 			break
 		}
 	}
-	
+
 	// If no binary unit found, check decimal units
 	if multiplier == 1 {
 		for unit, mult := range decimalUnits {
@@ -149,7 +149,7 @@ func parseDataSize(s string) (int64, error) {
 			}
 		}
 	}
-	
+
 	// If no unit found, check for "B" suffix
 	if multiplier == 1 {
 		if strings.HasSuffix(sLower, "b") && len(sLower) > 1 {
@@ -161,14 +161,14 @@ func parseDataSize(s string) (int64, error) {
 			multiplier = 1
 		}
 	}
-	
+
 	// Parse the number
 	var num float64
 	_, err := fmt.Sscanf(strings.TrimSpace(numStr), "%f", &num)
 	if err != nil {
 		return 0, fmt.Errorf("invalid number: %s", numStr)
 	}
-	
+
 	return int64(float64(multiplier) * num), nil
 }
 
@@ -191,12 +191,14 @@ type ServerConfig struct {
 
 // ArrConfig holds *arr app connection settings (Sonarr, Radarr, Lidarr, etc.)
 type ArrConfig struct {
-	Kind    string `yaml:"kind"` // Type of *arr app: "sonarr", "radarr", "lidarr", etc.
-	ID      string `yaml:"id"`   // Unique identifier for this instance
-	Name    string `yaml:"name"` // Display name
-	URL     string `yaml:"url"`
-	APIKey  string `yaml:"api_key"`
-	Enabled bool   `yaml:"enabled"`
+	Kind             string `yaml:"kind"` // Type of *arr app: "sonarr", "radarr", "lidarr", etc.
+	ID               string `yaml:"id"`   // Unique identifier for this instance
+	Name             string `yaml:"name"` // Display name
+	URL              string `yaml:"url"`
+	APIKey           string `yaml:"api_key"`
+	Enabled          bool   `yaml:"enabled"`
+	RemoveFromClient bool   `yaml:"remove_from_client"` // If true, remove from download client; if false, ignore download (default: false)
+	Blocklist        bool   `yaml:"blocklist"`          // If true, blocklist the release to prevent re-download (default: false)
 }
 
 // BittorrentClientConfig holds bittorrent client connection settings (qBittorrent, etc.)
@@ -231,13 +233,14 @@ type QBittorrentConfig struct {
 
 // TrackerConfig defines a tracker configuration
 type TrackerConfig struct {
-	ID            string  `yaml:"id"`             // Unique identifier for this tracker
-	Name          string  `yaml:"name"`            // Display name
-	URLRegex      string  `yaml:"url_regex"`       // Regex pattern to match tracker URLs (e.g., "tracker\\.tleechreload\\.org")
-	MinProgress   float64 `yaml:"min_progress"`    // Minimum progress percentage (0-100) before allowing deletion from bittorrent client
-	MinRatio      float64 `yaml:"min_ratio"`       // Minimum ratio that must be met before deletion is allowed (e.g., 1.0)
-	MinSeedingTime Duration `yaml:"min_seeding_time"` // Minimum seeding time that must be met before deletion is allowed (e.g., "7d")
-	Enabled       bool    `yaml:"enabled"`
+	ID                 string   `yaml:"id"`                   // Unique identifier for this tracker
+	Name               string   `yaml:"name"`                 // Display name
+	URLRegex           string   `yaml:"url_regex"`            // Regex pattern to match tracker URLs (e.g., "tracker\\.tleechreload\\.org")
+	MinProgress        float64  `yaml:"min_progress"`         // Minimum progress percentage (0-100) before allowing deletion from bittorrent client
+	SafeDeleteProgress float64  `yaml:"safe_delete_progress"` // Maximum progress percentage (0-100) below which deletion is safe (won't count as hit-and-run). If set, allows deletion even when cleaner rule has delete: false
+	MinRatio           float64  `yaml:"min_ratio"`            // Minimum ratio that must be met before deletion is allowed (e.g., 1.0)
+	MinSeedingTime     Duration `yaml:"min_seeding_time"`     // Minimum seeding time that must be met before deletion is allowed (e.g., "7d")
+	Enabled            bool     `yaml:"enabled"`
 }
 
 // ClientSelection defines which clients a cleaner should use
@@ -263,10 +266,10 @@ type MalwareBlockerConfig struct {
 
 // StrikeConfig defines strike-based removal configuration
 type StrikeConfig struct {
-	Strikes          int      `yaml:"strikes"`           // Number of times the check can fail before action
-	ResetOnProgress  bool     `yaml:"reset_on_progress"` // Reset strikes when progress is made (for stalled/slow)
-	Delete           bool     `yaml:"delete"`             // Delete from bittorrent client (always removed from *arr app)
-	MinSpeed         DataSize `yaml:"min_speed"`         // Minimum speed (e.g., "1MiB", "1MB", "1024KB") - only used for slow config
+	Strikes         int      `yaml:"strikes"`           // Number of times the check can fail before action
+	ResetOnProgress bool     `yaml:"reset_on_progress"` // Reset strikes when progress is made (for stalled/slow)
+	DeleteTorrent   bool     `yaml:"delete_torrent"`    // Delete torrent from bittorrent client (always removed from *arr app)
+	MinSpeed        DataSize `yaml:"min_speed"`         // Minimum speed (e.g., "1MiB", "1MB", "1024KB") - only used for slow config
 }
 
 // QueueCleanerConfig defines a queue cleaner instance
@@ -274,14 +277,14 @@ type QueueCleanerConfig struct {
 	ID           string           `yaml:"id"`
 	Name         string           `yaml:"name"`
 	Enabled      bool             `yaml:"enabled"`
-	DryRun       bool             `yaml:"dry_run"`   // If true, don't actually remove from arr apps
-	Schedule     string           `yaml:"schedule"`  // cron-like schedule (e.g., "every 1h")
-	Arrs         []string         `yaml:"arrs"`      // Array of *arr app IDs to remove downloads from (empty = use all enabled)
-	Bittorrent   []string         `yaml:"bittorrent"` // Array of bittorrent client IDs to monitor (empty = use all enabled)
-	Stalled      *StrikeConfig    `yaml:"stalled"`      // Stalled torrent configuration
-	Slow         *StrikeConfig    `yaml:"slow"`         // Slow download configuration (requires min_speed)
+	DryRun       bool             `yaml:"dry_run"`       // If true, don't actually remove from arr apps
+	Schedule     string           `yaml:"schedule"`      // cron-like schedule (e.g., "every 1h")
+	Arrs         []string         `yaml:"arrs"`          // Array of *arr app IDs to remove downloads from (empty = use all enabled)
+	Bittorrent   []string         `yaml:"bittorrent"`    // Array of bittorrent client IDs to monitor (empty = use all enabled)
+	Stalled      *StrikeConfig    `yaml:"stalled"`       // Stalled torrent configuration
+	Slow         *StrikeConfig    `yaml:"slow"`          // Slow download configuration (requires min_speed)
 	FailedImport *StrikeConfig    `yaml:"failed_import"` // Failed import configuration
-	Trackers     TrackerSelection `yaml:"trackers"`     // Tracker filtering configuration
+	Trackers     TrackerSelection `yaml:"trackers"`      // Tracker filtering configuration
 }
 
 // SeedingTimeConfig defines seeding time limits
@@ -292,16 +295,16 @@ type SeedingTimeConfig struct {
 
 // DownloadCleanerConfig defines a download cleaner instance
 type DownloadCleanerConfig struct {
-	ID            string           `yaml:"id"`
-	Name          string           `yaml:"name"`
-	Enabled       bool             `yaml:"enabled"`
-	DryRun        bool             `yaml:"dry_run"`   // If true, don't actually delete torrents
-	Schedule      string           `yaml:"schedule"`  // cron-like schedule (e.g., "every 1h")
-	Clients       ClientSelection  `yaml:"clients"`   // Client selection (empty arrays = use all enabled)
-	Trackers      TrackerSelection `yaml:"trackers"`  // Tracker filtering configuration
-	MaxRatio      float64          `yaml:"max_ratio"` // Maximum ratio - clean when reached (if min requirements met)
-	MaxSeedingTime Duration        `yaml:"max_seeding_time"` // Maximum seeding time - clean when reached (if min requirements met)
-	DeleteFiles   bool             `yaml:"delete_files"` // If true, delete files along with torrents
+	ID             string           `yaml:"id"`
+	Name           string           `yaml:"name"`
+	Enabled        bool             `yaml:"enabled"`
+	DryRun         bool             `yaml:"dry_run"`          // If true, don't actually delete torrents
+	Schedule       string           `yaml:"schedule"`         // cron-like schedule (e.g., "every 1h")
+	Clients        ClientSelection  `yaml:"clients"`          // Client selection (empty arrays = use all enabled)
+	Trackers       TrackerSelection `yaml:"trackers"`         // Tracker filtering configuration
+	MaxRatio       float64          `yaml:"max_ratio"`        // Maximum ratio - clean when reached (if min requirements met)
+	MaxSeedingTime Duration         `yaml:"max_seeding_time"` // Maximum seeding time - clean when reached (if min requirements met)
+	DeleteFiles    bool             `yaml:"delete_files"`     // If true, delete files along with torrents
 }
 
 // Load reads configuration from a file
@@ -426,7 +429,7 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("tracker %d: duplicate id '%s'", i, t.ID)
 			}
 			trackerIDs[t.ID] = true
-			
+
 			// Validate tracker-specific settings
 			if err := t.Validate(); err != nil {
 				return fmt.Errorf("tracker %d (%s): %w", i, t.ID, err)

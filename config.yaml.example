@@ -9,6 +9,8 @@ arrs:
     url: "http://localhost:8989"
     api_key: "your-sonarr-api-key"
     enabled: true
+    remove_from_client: false  # If true, remove from download client; if false, ignore download (default: false)
+    blocklist: false            # If true, blocklist the release to prevent re-download (default: false)
 
 bittorrent_clients:
   - kind: "qbittorrent"
@@ -24,6 +26,7 @@ trackers:
     name: "TLeechReload"
     url_regex: "tracker\.(tleechreload|torrentleech)\.org"
     min_progress: 0.0  # Minimum progress percentage (0-100) before allowing deletion from bittorrent client
+    safe_delete_progress: 10.0  # Maximum progress percentage (0-100) below which deletion is safe (won't count as hit-and-run). If set, allows deletion even when cleaner rule has delete: false
     min_ratio: 1.0  # Minimum ratio that must be met before deletion is allowed (e.g., 1.0 for 1:1)
     min_seeding_time: "7d"  # Minimum seeding time that must be met before deletion is allowed
     enabled: true
@@ -59,15 +62,15 @@ queue_cleaners:
     stalled:
       strikes: 3              # Number of times the check can fail before action
       reset_on_progress: true # Reset strikes when progress is made
-      delete: true            # Delete from bittorrent client
+      delete_torrent: true    # Delete torrent from bittorrent client (always removed from *arr app)
     slow:
       strikes: 3              # Number of times the check can fail before action
       reset_on_progress: true # Reset strikes when progress is made
-      delete: true            # Delete from bittorrent client
+      delete_torrent: true    # Delete torrent from bittorrent client (always removed from *arr app)
       min_speed: "1MiB"      # Minimum speed (e.g., "1MiB", "1MB", "1024KB") - required for slow config
     failed_import:
       strikes: 1              # Number of times the check can fail before action
-      delete: true            # Delete from bittorrent client
+      delete_torrent: true    # Delete torrent from bittorrent client (always removed from *arr app)
     trackers:
       tracker_ids: []  # Array of tracker IDs (empty = no filtering)
       filter_mode: ""   # "include" or "exclude"
