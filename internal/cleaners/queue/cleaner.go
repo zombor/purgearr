@@ -366,8 +366,7 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 
 	queueItemsProcessed := 0
 	queueItemsFilteredOut := 0
-	sampleFilteredTrackers := make(map[string]int) // Track sample tracker URLs that were filtered out
-	stalledStatesSeen := make(map[string]int)      // Track what states we see for debugging
+	stalledStatesSeen := make(map[string]int) // Track what states we see for debugging
 
 	// Iterate over queue items from *arr apps (source of truth)
 	for hash, queueItems := range arrQueueMap {
@@ -393,38 +392,12 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 			continue
 		}
 
-		// Log all torrents being checked for debugging (especially slow ones)
-		// Always log speed for stalledDL torrents since they might still be downloading slowly
-		if torrent.State == "stalledDL" || (torrent.Dlspeed > 0 && torrent.Dlspeed < 200000) {
-			c.logger.Info("Checking queue item (potential slow/stalled download)", "torrent", torrent.Name, "state", torrent.State, "tracker", torrent.Tracker, "speed", torrent.Dlspeed, "progress", torrent.Progress, "hash", hash, "downloaded_session", torrent.DownloadedSession)
-		} else {
-			c.logger.Debug("Checking queue item", "torrent", torrent.Name, "state", torrent.State, "tracker", torrent.Tracker, "speed", torrent.Dlspeed, "progress", torrent.Progress)
-		}
-
 		// Collect sample states for debugging
 		stalledStatesSeen[torrent.State]++
 
 		// Check tracker filter
 		if !c.matchesTrackerFilter(torrent.Tracker) {
 			queueItemsFilteredOut++
-
-			// Log why torrents are being filtered out (especially slow/stalled ones)
-			// Use INFO level for slow downloads so we can see what's happening
-			if torrent.Dlspeed > 0 && torrent.Dlspeed < 200000 {
-				c.logger.Info("Torrent filtered out by tracker (slow download)", "torrent", torrent.Name, "state", torrent.State, "tracker_url", torrent.Tracker, "filter_mode", c.config.Trackers.FilterMode, "configured_tracker_ids", c.config.Trackers.TrackerIDs, "speed", torrent.Dlspeed, "progress", torrent.Progress)
-			} else {
-				c.logger.Debug("Torrent filtered out by tracker", "torrent", torrent.Name, "state", torrent.State, "tracker_url", torrent.Tracker, "filter_mode", c.config.Trackers.FilterMode, "configured_tracker_ids", c.config.Trackers.TrackerIDs, "speed", torrent.Dlspeed, "progress", torrent.Progress)
-			}
-
-			// Special logging for stalled torrents that are being filtered out
-			if torrent.State == "stalledDL" || torrent.State == "stalledUP" || strings.HasPrefix(strings.ToLower(torrent.State), "stalled") {
-				c.logger.Info("Stalled torrent filtered out by tracker", "torrent", torrent.Name, "state", torrent.State, "tracker_url", torrent.Tracker, "filter_mode", c.config.Trackers.FilterMode, "configured_trackers", c.config.Trackers.TrackerIDs)
-			}
-
-			// Collect sample tracker URLs for logging
-			if len(sampleFilteredTrackers) < 5 {
-				sampleFilteredTrackers[torrent.Tracker]++
-			}
 			continue
 		}
 
@@ -643,12 +616,6 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 	}
 
 	c.logger.Info("Finished processing queue items", "cleaner", c.config.Name, "total_queue_items", totalQueueItems, "queue_items_filtered_out", queueItemsFilteredOut, "queue_items_processed", queueItemsProcessed, "queue_items_to_remove_from_arr", len(hashesToRemoveFromArr))
-	if len(stalledStatesSeen) > 0 {
-		c.logger.Info("Sample torrent states seen", "cleaner", c.config.Name, "states", stalledStatesSeen)
-	}
-	if queueItemsFilteredOut > 0 && len(sampleFilteredTrackers) > 0 {
-		c.logger.Info("Sample tracker URLs that were filtered out", "cleaner", c.config.Name, "sample_trackers", sampleFilteredTrackers, "filter_mode", c.config.Trackers.FilterMode, "configured_tracker_ids", c.config.Trackers.TrackerIDs)
-	}
 
 	// Clean up strikes for queue items that no longer exist
 	// Use normalized hashes for comparison
