@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/zombor/purgearr/internal/clients/lidarr"
 	"github.com/zombor/purgearr/internal/clients/qbittorrent"
 	"github.com/zombor/purgearr/internal/clients/radarr"
 	"github.com/zombor/purgearr/internal/clients/sonarr"
@@ -122,6 +123,45 @@ func (w *RadarrClientWrapper) GetQueue() (*QueueResponse, error) {
 }
 
 func (w *RadarrClientWrapper) RemoveFromQueue(id int, removeFromClient bool, blocklist bool) error {
+	return w.Client.RemoveFromQueue(id, removeFromClient, blocklist)
+}
+
+// LidarrClientWrapper wraps a Lidarr client to implement ArrClient
+type LidarrClientWrapper struct {
+	Client *lidarr.Client
+}
+
+func (w *LidarrClientWrapper) GetQueue() (*QueueResponse, error) {
+	resp, err := w.Client.GetQueue()
+	if err != nil {
+		return nil, err
+	}
+
+	records := make([]QueueItem, len(resp.Records))
+	for i, item := range resp.Records {
+		statusMessages := make([]StatusMessage, len(item.StatusMessages))
+		for j, sm := range item.StatusMessages {
+			statusMessages[j] = StatusMessage{
+				Title:    sm.Title,
+				Messages: sm.Messages,
+			}
+		}
+		records[i] = QueueItem{
+			ID:             item.ID,
+			Title:          item.Title,
+			Status:         item.Status,
+			StatusMessages: statusMessages,
+			ErrorMessage:   item.ErrorMessage,
+			DownloadID:     item.DownloadID,
+		}
+	}
+
+	return &QueueResponse{
+		Records: records,
+	}, nil
+}
+
+func (w *LidarrClientWrapper) RemoveFromQueue(id int, removeFromClient bool, blocklist bool) error {
 	return w.Client.RemoveFromQueue(id, removeFromClient, blocklist)
 }
 

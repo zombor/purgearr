@@ -350,7 +350,7 @@ func (c *Config) Validate() error {
 	validArrKinds := map[string]bool{
 		"sonarr": true,
 		"radarr": true,
-		// TODO: Add lidarr, etc. as they are implemented
+		"lidarr": true,
 	}
 
 	// Validate *arr apps

@@ -11,6 +11,14 @@ arrs:
     enabled: true
     remove_from_client: false  # If true, remove from download client; if false, ignore download (default: false)
     blocklist: false            # If true, blocklist the release to prevent re-download (default: false)
+  - kind: "lidarr"
+    id: "main"
+    name: "Main Lidarr"
+    url: "http://localhost:8686"
+    api_key: "your-lidarr-api-key"
+    enabled: true
+    remove_from_client: false  # If true, remove from download client; if false, ignore download (default: false)
+    blocklist: false            # If true, blocklist the release to prevent re-download (default: false)
 
 bittorrent_clients:
   - kind: "qbittorrent"

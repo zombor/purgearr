@@ -7,9 +7,10 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/zombor/purgearr/internal/clients/lidarr"
 	"github.com/zombor/purgearr/internal/clients/qbittorrent"
-	"github.com/zombor/purgearr/internal/clients/sonarr"
 	"github.com/zombor/purgearr/internal/clients/radarr"
+	"github.com/zombor/purgearr/internal/clients/sonarr"
 	"github.com/zombor/purgearr/internal/config"
 	"github.com/zombor/purgearr/internal/scheduler"
 )
@@ -21,18 +22,20 @@ type Handler struct {
 	qbtClient      *qbittorrent.Client
 	sonarrClient   *sonarr.Client
 	radarrClient   *radarr.Client
+	lidarrClient   *lidarr.Client
 	logger         *slog.Logger
 	configPath     string
 }
 
 // NewHandler creates a new API handler
-func NewHandler(cfg *config.Config, sched *scheduler.Scheduler, qbtClient *qbittorrent.Client, sonarrClient *sonarr.Client, radarrClient *radarr.Client, logger *slog.Logger, configPath string) *Handler {
+func NewHandler(cfg *config.Config, sched *scheduler.Scheduler, qbtClient *qbittorrent.Client, sonarrClient *sonarr.Client, radarrClient *radarr.Client, lidarrClient *lidarr.Client, logger *slog.Logger, configPath string) *Handler {
 	return &Handler{
 		config:       cfg,
 		scheduler:    sched,
 		qbtClient:    qbtClient,
 		sonarrClient: sonarrClient,
 		radarrClient: radarrClient,
+		lidarrClient: lidarrClient,
 		logger:       logger,
 		configPath:   configPath,
 	}
@@ -83,6 +86,7 @@ func (h *Handler) GetStatus(w http.ResponseWriter, r *http.Request) {
 	qbtEnabled := 0
 	sonarrEnabled := 0
 	radarrEnabled := 0
+	lidarrEnabled := 0
 	for _, client := range h.config.BittorrentClients {
 		if client.Enabled && client.Kind == "qbittorrent" {
 			qbtEnabled++
@@ -95,6 +99,8 @@ func (h *Handler) GetStatus(w http.ResponseWriter, r *http.Request) {
 				sonarrEnabled++
 			case "radarr":
 				radarrEnabled++
+			case "lidarr":
+				lidarrEnabled++
 			}
 		}
 	}
@@ -113,6 +119,10 @@ func (h *Handler) GetStatus(w http.ResponseWriter, r *http.Request) {
 			"radarr": map[string]interface{}{
 				"count":   radarrEnabled,
 				"enabled": radarrEnabled,
+			},
+			"lidarr": map[string]interface{}{
+				"count":   lidarrEnabled,
+				"enabled": lidarrEnabled,
 			},
 		},
 	}
@@ -203,6 +213,31 @@ func (h *Handler) TestRadarrConnection(w http.ResponseWriter, r *http.Request) {
 	}
 
 	status, err := h.radarrClient.GetSystemStatus()
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"version": status.Version,
+	})
+}
+
+// TestLidarrConnection tests the Lidarr connection
+func (h *Handler) TestLidarrConnection(w http.ResponseWriter, r *http.Request) {
+	if h.lidarrClient == nil {
+		http.Error(w, "Lidarr client not configured", http.StatusBadRequest)
+		return
+	}
+
+	status, err := h.lidarrClient.GetSystemStatus()
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
