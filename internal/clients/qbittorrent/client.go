@@ -230,6 +230,28 @@ func (c *Client) GetTorrentProperties(hash string) (map[string]interface{}, erro
 	return props, nil
 }
 
+// GetTorrentContentPath retrieves the content path for a torrent
+func (c *Client) GetTorrentContentPath(hash string) (string, error) {
+	props, err := c.GetTorrentProperties(hash)
+	if err != nil {
+		return "", fmt.Errorf("getting torrent properties: %w", err)
+	}
+
+	// Try content_path first (full path to content)
+	if contentPath, ok := props["content_path"].(string); ok && contentPath != "" {
+		return contentPath, nil
+	}
+
+	// Fall back to save_path + name
+	savePath, _ := props["save_path"].(string)
+	name, _ := props["name"].(string)
+	if savePath != "" && name != "" {
+		return fmt.Sprintf("%s/%s", strings.TrimSuffix(savePath, "/"), name), nil
+	}
+
+	return "", fmt.Errorf("could not determine content path for torrent %s", hash)
+}
+
 // AppVersion represents qBittorrent version info
 type AppVersion struct {
 	Version string `json:"version"`

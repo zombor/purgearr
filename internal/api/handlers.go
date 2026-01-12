@@ -143,7 +143,9 @@ func (h *Handler) RunQueueCleaner(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.scheduler.RunJobNow(id); err != nil {
+	// Prefix the ID with "queue-" to match the job ID format
+	jobID := "queue-" + id
+	if err := h.scheduler.RunJobNow(jobID); err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
@@ -160,7 +162,9 @@ func (h *Handler) RunDownloadCleaner(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.scheduler.RunJobNow(id); err != nil {
+	// Prefix the ID with "download-" to match the job ID format
+	jobID := "download-" + id
+	if err := h.scheduler.RunJobNow(jobID); err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}

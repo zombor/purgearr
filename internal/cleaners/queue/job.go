@@ -24,7 +24,7 @@ func (j *Job) Run() error {
 
 // ID returns the job ID
 func (j *Job) ID() string {
-	return j.config.ID
+	return "queue-" + j.config.ID
 }
 
 // Name returns the job name

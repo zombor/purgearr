@@ -174,13 +174,13 @@ func parseDataSize(s string) (int64, error) {
 
 // Config represents the main application configuration
 type Config struct {
-	Server            ServerConfig             `yaml:"server"`
-	Arrs              []ArrConfig              `yaml:"arrs"`               // Array of *arr apps (Sonarr, Radarr, etc.)
-	BittorrentClients []BittorrentClientConfig `yaml:"bittorrent_clients"` // Array of bittorrent clients (qBittorrent, etc.)
-	Trackers          []TrackerConfig          `yaml:"trackers"`           // Tracker definitions
-	MalwareBlocker    MalwareBlockerConfig     `yaml:"malware_blocker"`    // Malware blocker configuration
-	QueueCleaners     []QueueCleanerConfig     `yaml:"queue_cleaners"`
-	DownloadCleaners  []DownloadCleanerConfig  `yaml:"download_cleaners"`
+	Server            ServerConfig             `yaml:"server" json:"server"`
+	Arrs              []ArrConfig              `yaml:"arrs" json:"arrs"`                             // Array of *arr apps (Sonarr, Radarr, etc.)
+	BittorrentClients []BittorrentClientConfig `yaml:"bittorrent_clients" json:"bittorrent_clients"` // Array of bittorrent clients (qBittorrent, etc.)
+	Trackers          []TrackerConfig          `yaml:"trackers" json:"trackers"`                     // Tracker definitions
+	MalwareBlocker    MalwareBlockerConfig     `yaml:"malware_blocker" json:"malware_blocker"`       // Malware blocker configuration
+	QueueCleaners     []QueueCleanerConfig     `yaml:"queue_cleaners" json:"queue_cleaners"`
+	DownloadCleaners  []DownloadCleanerConfig  `yaml:"download_cleaners" json:"download_cleaners"`
 }
 
 // ServerConfig holds server configuration
@@ -274,17 +274,17 @@ type StrikeConfig struct {
 
 // QueueCleanerConfig defines a queue cleaner instance
 type QueueCleanerConfig struct {
-	ID           string           `yaml:"id"`
-	Name         string           `yaml:"name"`
-	Enabled      bool             `yaml:"enabled"`
-	DryRun       bool             `yaml:"dry_run"`       // If true, don't actually remove from arr apps
-	Schedule     string           `yaml:"schedule"`      // cron-like schedule (e.g., "every 1h")
-	Arrs         []string         `yaml:"arrs"`          // Array of *arr app IDs to remove downloads from (empty = use all enabled)
-	Bittorrent   []string         `yaml:"bittorrent"`    // Array of bittorrent client IDs to monitor (empty = use all enabled)
-	Stalled      *StrikeConfig    `yaml:"stalled"`       // Stalled torrent configuration
-	Slow         *StrikeConfig    `yaml:"slow"`          // Slow download configuration (requires min_speed)
-	FailedImport *StrikeConfig    `yaml:"failed_import"` // Failed import configuration
-	Trackers     TrackerSelection `yaml:"trackers"`      // Tracker filtering configuration
+	ID           string           `yaml:"id" json:"id"`
+	Name         string           `yaml:"name" json:"name"`
+	Enabled      bool             `yaml:"enabled" json:"enabled"`
+	DryRun       bool             `yaml:"dry_run" json:"dry_run"`             // If true, don't actually remove from arr apps
+	Schedule     string           `yaml:"schedule" json:"schedule"`           // cron-like schedule (e.g., "every 1h")
+	Arrs         []string         `yaml:"arrs" json:"arrs"`                   // Array of *arr app IDs to remove downloads from (empty = use all enabled)
+	Bittorrent   []string         `yaml:"bittorrent" json:"bittorrent"`       // Array of bittorrent client IDs to monitor (empty = use all enabled)
+	Stalled      *StrikeConfig    `yaml:"stalled" json:"stalled"`             // Stalled torrent configuration
+	Slow         *StrikeConfig    `yaml:"slow" json:"slow"`                   // Slow download configuration (requires min_speed)
+	FailedImport *StrikeConfig    `yaml:"failed_import" json:"failed_import"` // Failed import configuration
+	Trackers     TrackerSelection `yaml:"trackers" json:"trackers"`           // Tracker filtering configuration
 }
 
 // SeedingTimeConfig defines seeding time limits
@@ -295,16 +295,16 @@ type SeedingTimeConfig struct {
 
 // DownloadCleanerConfig defines a download cleaner instance
 type DownloadCleanerConfig struct {
-	ID             string           `yaml:"id"`
-	Name           string           `yaml:"name"`
-	Enabled        bool             `yaml:"enabled"`
-	DryRun         bool             `yaml:"dry_run"`          // If true, don't actually delete torrents
-	Schedule       string           `yaml:"schedule"`         // cron-like schedule (e.g., "every 1h")
-	Clients        ClientSelection  `yaml:"clients"`          // Client selection (empty arrays = use all enabled)
-	Trackers       TrackerSelection `yaml:"trackers"`         // Tracker filtering configuration
-	MaxRatio       float64          `yaml:"max_ratio"`        // Maximum ratio - clean when reached (if min requirements met)
-	MaxSeedingTime Duration         `yaml:"max_seeding_time"` // Maximum seeding time - clean when reached (if min requirements met)
-	DeleteFiles    bool             `yaml:"delete_files"`     // If true, delete files along with torrents
+	ID             string           `yaml:"id" json:"id"`
+	Name           string           `yaml:"name" json:"name"`
+	Enabled        bool             `yaml:"enabled" json:"enabled"`
+	DryRun         bool             `yaml:"dry_run" json:"dry_run"`                   // If true, don't actually delete torrents
+	Schedule       string           `yaml:"schedule" json:"schedule"`                 // cron-like schedule (e.g., "every 1h")
+	Clients        ClientSelection  `yaml:"clients" json:"clients"`                   // Client selection (empty arrays = use all enabled)
+	Trackers       TrackerSelection `yaml:"trackers" json:"trackers"`                 // Tracker filtering configuration
+	MaxRatio       float64          `yaml:"max_ratio" json:"max_ratio"`               // Maximum ratio - clean when reached (if min requirements met)
+	MaxSeedingTime Duration         `yaml:"max_seeding_time" json:"max_seeding_time"` // Maximum seeding time - clean when reached (if min requirements met)
+	DeleteFiles    bool             `yaml:"delete_files" json:"delete_files"`         // If true, delete files along with torrents
 }
 
 // Load reads configuration from a file

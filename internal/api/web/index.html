@@ -207,13 +207,14 @@
                 ]);
                 const jobs = status.jobs || {};
                 
-                // Build sets of cleaner IDs from config
+                // Build sets of cleaner IDs from config (include all, not just enabled)
+                // Jobs only exist if they were enabled at startup
                 const queueCleanerIds = new Set();
                 const downloadCleanerIds = new Set();
                 
                 if (config.queue_cleaners) {
                     config.queue_cleaners.forEach(qc => {
-                        if (qc.enabled && qc.id) {
+                        if (qc.id) {
                             queueCleanerIds.add(qc.id);
                         }
                     });
@@ -221,7 +222,7 @@
                 
                 if (config.download_cleaners) {
                     config.download_cleaners.forEach(dc => {
-                        if (dc.enabled && dc.id) {
+                        if (dc.id) {
                             downloadCleanerIds.add(dc.id);
                         }
                     });
@@ -240,8 +241,21 @@
                         continue;
                     }
                     
+                    // Strip prefix from job ID to get config ID
+                    let configId = id;
+                    let isQueueCleaner = false;
+                    let isDownloadCleaner = false;
+                    
+                    if (id.startsWith('queue-')) {
+                        configId = id.substring(6); // Remove "queue-" prefix
+                        isQueueCleaner = queueCleanerIds.has(configId);
+                    } else if (id.startsWith('download-')) {
+                        configId = id.substring(9); // Remove "download-" prefix
+                        isDownloadCleaner = downloadCleanerIds.has(configId);
+                    }
+                    
                     // Check if it's a queue cleaner
-                    if (queueCleanerIds.has(id)) {
+                    if (isQueueCleaner) {
                         const jobItem = `
                             <div class="job-item">
                                 <div class="job-info">
@@ -252,13 +266,13 @@
                                         Next Run: ${jobData.next_run ? new Date(jobData.next_run).toLocaleString() : 'N/A'}
                                     </div>
                                 </div>
-                                <button onclick="runQueueCleaner('${id}')">Run</button>
+                                <button onclick="runQueueCleaner('${configId}')">Run</button>
                             </div>
                         `;
                         queueCleaners.push(jobItem);
                     }
                     // Check if it's a download cleaner
-                    else if (downloadCleanerIds.has(id)) {
+                    else if (isDownloadCleaner) {
                         const jobItem = `
                             <div class="job-item">
                                 <div class="job-info">
@@ -269,7 +283,7 @@
                                         Next Run: ${jobData.next_run ? new Date(jobData.next_run).toLocaleString() : 'N/A'}
                                     </div>
                                 </div>
-                                <button onclick="runDownloadCleaner('${id}')">Run</button>
+                                <button onclick="runDownloadCleaner('${configId}')">Run</button>
                             </div>
                         `;
                         downloadCleaners.push(jobItem);
