@@ -88,6 +88,64 @@
             color: #aaa;
             margin-top: 5px;
         }
+        .torrent-item {
+            padding: 15px;
+            background: #333;
+            margin: 10px 0;
+            border-radius: 4px;
+            border-left: 4px solid #4a9eff;
+        }
+        .torrent-name {
+            font-weight: bold;
+            color: #6ab7ff;
+            margin-bottom: 8px;
+        }
+        .torrent-info {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 10px;
+            font-size: 0.9em;
+            color: #aaa;
+        }
+        .torrent-info-item {
+            display: flex;
+            flex-direction: column;
+        }
+        .torrent-info-label {
+            color: #888;
+            font-size: 0.85em;
+            margin-bottom: 2px;
+        }
+        .torrent-info-value {
+            color: #e0e0e0;
+        }
+        .strikes {
+            display: flex;
+            gap: 15px;
+            margin-top: 10px;
+            flex-wrap: wrap;
+        }
+        .strike-item {
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 0.85em;
+        }
+        .strike-stalled {
+            background: #ff6b6b;
+            color: white;
+        }
+        .strike-slow {
+            background: #ffa500;
+            color: white;
+        }
+        .strike-failed {
+            background: #ff4757;
+            color: white;
+        }
+        .strike-none {
+            background: #2d5016;
+            color: #90ee90;
+        }
         pre {
             background: #1a1a1a;
             padding: 10px;
@@ -123,6 +181,12 @@
             <h2>Malware Blocker</h2>
             <button onclick="runMalwareBlocker()">Run Now</button>
             <div id="malware-blocker"></div>
+        </div>
+
+        <div class="section">
+            <h2>Torrent Status</h2>
+            <button onclick="loadTorrentStatus()">Refresh</button>
+            <div id="torrent-status"></div>
         </div>
 
         <div class="section">
@@ -384,9 +448,105 @@
             }
         }
 
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i];
+        }
+
+        function formatPercent(progress) {
+            return (progress * 100).toFixed(2) + '%';
+        }
+
+        async function loadTorrentStatus() {
+            try {
+                const status = await apiCall('/torrents/status');
+                const container = document.getElementById('torrent-status');
+                
+                if (!status || Object.keys(status).length === 0) {
+                    container.innerHTML = '<div class="status">No torrents currently being tracked</div>';
+                    return;
+                }
+
+                let html = '';
+                for (const [cleanerId, torrents] of Object.entries(status)) {
+                    if (torrents.length === 0) {
+                        continue;
+                    }
+                    
+                    html += `<h3 style="margin-top: 20px; margin-bottom: 10px; color: #6ab7ff;">${cleanerId}</h3>`;
+                    
+                    for (const torrent of torrents) {
+                        const isStalled = torrent.state === 'stalledDL' || torrent.state === 'stalledUP' || torrent.state === 'stalled';
+                        const hasStrikes = torrent.stalled_strikes > 0 || torrent.slow_strikes > 0 || torrent.failed_import_strikes > 0;
+                        
+                        html += `
+                            <div class="torrent-item" style="border-left-color: ${hasStrikes ? '#ff6b6b' : '#4a9eff'}">
+                                <div class="torrent-name">${torrent.name}</div>
+                                <div class="torrent-info">
+                                    <div class="torrent-info-item">
+                                        <span class="torrent-info-label">State</span>
+                                        <span class="torrent-info-value">${torrent.state}</span>
+                                    </div>
+                                    <div class="torrent-info-item">
+                                        <span class="torrent-info-label">Progress</span>
+                                        <span class="torrent-info-value">${formatPercent(torrent.progress)}</span>
+                                    </div>
+                                    <div class="torrent-info-item">
+                                        <span class="torrent-info-label">Download Speed</span>
+                                        <span class="torrent-info-value">${formatBytes(torrent.dlspeed)}/s</span>
+                                    </div>
+                                    <div class="torrent-info-item">
+                                        <span class="torrent-info-label">Upload Speed</span>
+                                        <span class="torrent-info-value">${formatBytes(torrent.upspeed)}/s</span>
+                                    </div>
+                                    <div class="torrent-info-item">
+                                        <span class="torrent-info-label">Tracker</span>
+                                        <span class="torrent-info-value" style="word-break: break-all;">${torrent.tracker || 'N/A'}</span>
+                                    </div>
+                                </div>
+                                <div class="strikes">
+                                    ${torrent.stalled_threshold !== null ? `
+                                        <div class="strike-item ${torrent.stalled_strikes > 0 ? 'strike-stalled' : 'strike-none'}">
+                                            Stalled: ${torrent.stalled_strikes}/${torrent.stalled_threshold}
+                                        </div>
+                                    ` : ''}
+                                    ${torrent.slow_threshold !== null ? `
+                                        <div class="strike-item ${torrent.slow_strikes > 0 ? 'strike-slow' : 'strike-none'}">
+                                            Slow: ${torrent.slow_strikes}/${torrent.slow_threshold}
+                                        </div>
+                                    ` : ''}
+                                    ${torrent.failed_import_threshold !== null ? `
+                                        <div class="strike-item ${torrent.failed_import_strikes > 0 ? 'strike-failed' : 'strike-none'}">
+                                            Failed Import: ${torrent.failed_import_strikes}/${torrent.failed_import_threshold}
+                                        </div>
+                                    ` : ''}
+                                </div>
+                            </div>
+                        `;
+                    }
+                }
+                
+                if (html === '') {
+                    container.innerHTML = '<div class="status">No torrents currently being tracked</div>';
+                } else {
+                    container.innerHTML = html;
+                }
+            } catch (error) {
+                document.getElementById('torrent-status').innerHTML = 
+                    `<div class="status error">Error: ${error.message}</div>`;
+            }
+        }
+
         // Load status and cleaners on page load
         loadStatus();
         loadCleaners();
+        loadTorrentStatus();
+        
+        // Auto-refresh torrent status every 30 seconds
+        setInterval(loadTorrentStatus, 30000);
     </script>
 </body>
 </html>

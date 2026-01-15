@@ -32,3 +32,8 @@ func (j *Job) Name() string {
 	return j.config.Name
 }
 
+// GetCleaner returns the underlying cleaner
+func (j *Job) GetCleaner() *Cleaner {
+	return j.cleaner
+}
+

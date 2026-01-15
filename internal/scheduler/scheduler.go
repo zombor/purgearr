@@ -125,6 +125,15 @@ func (s *Scheduler) GetAllJobs() map[string]map[string]interface{} {
 	return result
 }
 
+// GetJob returns a job by ID
+func (s *Scheduler) GetJob(id string) (Job, bool) {
+	sj, ok := s.jobs[id]
+	if !ok {
+		return nil, false
+	}
+	return sj.job, true
+}
+
 // Stop stops the scheduler
 func (s *Scheduler) Stop() {
 	close(s.stop)

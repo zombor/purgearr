@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/zombor/purgearr/internal/clients/lidarr"
@@ -12,6 +13,7 @@ import (
 	"github.com/zombor/purgearr/internal/clients/radarr"
 	"github.com/zombor/purgearr/internal/clients/sonarr"
 	"github.com/zombor/purgearr/internal/config"
+	queuecleaner "github.com/zombor/purgearr/internal/cleaners/queue"
 	"github.com/zombor/purgearr/internal/scheduler"
 )
 
@@ -291,5 +293,50 @@ func (h *Handler) HealthCheck(w http.ResponseWriter, r *http.Request) {
 		"status": "ok",
 		"time":   time.Now().Format(time.RFC3339),
 	})
+}
+
+// GetTorrentStatus returns the current status of torrents being processed by queue cleaners
+func (h *Handler) GetTorrentStatus(w http.ResponseWriter, r *http.Request) {
+	allStatuses := make(map[string][]queuecleaner.TorrentStatus)
+
+	// Get all jobs from scheduler
+	jobs := h.scheduler.GetAllJobs()
+	for jobID := range jobs {
+		// Only process queue cleaner jobs
+		if !strings.HasPrefix(jobID, "queue-") {
+			continue
+		}
+
+		// Get the job and try to cast it to queue.Job
+		job, ok := h.scheduler.GetJob(jobID)
+		if !ok {
+			continue
+		}
+
+		// Type assert to queue.Job
+		queueJob, ok := job.(*queuecleaner.Job)
+		if !ok {
+			continue
+		}
+
+		// Get the cleaner and its status
+		cleaner := queueJob.GetCleaner()
+		statuses, err := cleaner.GetStrikesStatus()
+		if err != nil {
+			h.logger.Warn("Failed to get strikes status", "cleaner", jobID, "error", err)
+			continue
+		}
+
+		// Extract cleaner ID from job ID (remove "queue-" prefix)
+		cleanerID := strings.TrimPrefix(jobID, "queue-")
+		allStatuses[cleanerID] = statuses
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(allStatuses); err != nil {
+		h.logger.Error("Error encoding torrent status", "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
 

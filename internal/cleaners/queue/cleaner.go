@@ -794,6 +794,94 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 	return result, nil
 }
 
+// TorrentStatus represents the status of a torrent with strikes
+type TorrentStatus struct {
+	Hash              string  `json:"hash"`
+	Name              string  `json:"name"`
+	State             string  `json:"state"`
+	Progress          float64 `json:"progress"`
+	Dlspeed           int64   `json:"dlspeed"`
+	Upspeed           int64   `json:"upspeed"`
+	Tracker           string  `json:"tracker"`
+	StalledStrikes    int     `json:"stalled_strikes"`
+	SlowStrikes       int     `json:"slow_strikes"`
+	FailedImportStrikes int   `json:"failed_import_strikes"`
+	StalledThreshold  *int    `json:"stalled_threshold,omitempty"`
+	SlowThreshold     *int    `json:"slow_threshold,omitempty"`
+	FailedImportThreshold *int `json:"failed_import_threshold,omitempty"`
+	LastProgress      float64 `json:"last_progress"`
+	LastCheckTime     time.Time `json:"last_check_time"`
+}
+
+// GetStrikesStatus returns the current status of all torrents with strikes
+func (c *Cleaner) GetStrikesStatus() ([]TorrentStatus, error) {
+	c.strikesMu.RLock()
+	defer c.strikesMu.RUnlock()
+
+	// Get all torrents from qBittorrent
+	torrents, err := c.qbtClient.GetTorrents()
+	if err != nil {
+		return nil, fmt.Errorf("getting torrents: %w", err)
+	}
+
+	// Build map of hash to torrent for quick lookup
+	torrentMap := make(map[string]*qbittorrent.Torrent)
+	torrentMapLower := make(map[string]*qbittorrent.Torrent)
+	for i := range torrents {
+		hash := torrents[i].Hash
+		torrentMap[hash] = &torrents[i]
+		torrentMapLower[strings.ToLower(hash)] = &torrents[i]
+	}
+
+	// Build result list from strikes
+	result := make([]TorrentStatus, 0)
+	for hash, strikes := range c.strikes {
+		// Find the torrent (try exact match first, then case-insensitive)
+		torrent, exists := torrentMap[hash]
+		if !exists {
+			torrent, exists = torrentMapLower[strings.ToLower(hash)]
+		}
+
+		// Only include torrents that exist and are not completed
+		if !exists || torrent.Progress >= 1.0 {
+			continue
+		}
+
+		status := TorrentStatus{
+			Hash:                hash,
+			Name:                torrent.Name,
+			State:               torrent.State,
+			Progress:            torrent.Progress,
+			Dlspeed:             torrent.Dlspeed,
+			Upspeed:             torrent.Upspeed,
+			Tracker:             torrent.Tracker,
+			StalledStrikes:      strikes.stalledStrikes,
+			SlowStrikes:         strikes.slowStrikes,
+			FailedImportStrikes: strikes.failedImportStrikes,
+			LastProgress:        strikes.lastProgress,
+			LastCheckTime:       strikes.lastCheckTime,
+		}
+
+		// Add thresholds if configured
+		if c.config.Stalled != nil {
+			threshold := c.config.Stalled.Strikes
+			status.StalledThreshold = &threshold
+		}
+		if c.config.Slow != nil {
+			threshold := c.config.Slow.Strikes
+			status.SlowThreshold = &threshold
+		}
+		if c.config.FailedImport != nil {
+			threshold := c.config.FailedImport.Strikes
+			status.FailedImportThreshold = &threshold
+		}
+
+		result = append(result, status)
+	}
+
+	return result, nil
+}
+
 // matchesTrackerFilter checks if a tracker URL matches the configured tracker filters
 func (c *Cleaner) matchesTrackerFilter(trackerURL string) bool {
 	// If no trackers configured or no tracker IDs specified, match all
