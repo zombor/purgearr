@@ -1,7 +1,6 @@
 package radarr
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -118,26 +117,18 @@ func (c *Client) GetQueue() (*QueueResponse, error) {
 }
 
 // RemoveFromQueue removes an item from Radarr's queue
+// removeFromClient: if true, removes from download client; if false, ignores the download (doesn't remove from client)
+// blocklist: if true, blocks the release from being redownloaded
 func (c *Client) RemoveFromQueue(id int, removeFromClient bool, blocklist bool) error {
-	url := fmt.Sprintf("%s/api/v3/queue/%d", c.url, id)
-	
-	params := map[string]interface{}{
-		"removeFromClient": removeFromClient,
-		"blocklist":         blocklist,
-	}
+	// Build URL with query parameters
+	url := fmt.Sprintf("%s/api/v3/queue/%d?removeFromClient=%t&blocklist=%t", c.url, id, removeFromClient, blocklist)
 
-	body, err := json.Marshal(params)
-	if err != nil {
-		return fmt.Errorf("marshaling request: %w", err)
-	}
-
-	req, err := http.NewRequest("DELETE", url, bytes.NewReader(body))
+	req, err := http.NewRequest("DELETE", url, nil)
 	if err != nil {
 		return fmt.Errorf("creating request: %w", err)
 	}
 
 	req.Header.Set("X-Api-Key", c.apiKey)
-	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.client.Do(req)
 	if err != nil {

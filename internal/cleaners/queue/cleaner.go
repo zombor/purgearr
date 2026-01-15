@@ -500,6 +500,7 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 				result.RemovedItems = append(result.RemovedItems, fmt.Sprintf("%s (stalled, %d strikes)", torrent.Name, strikes.stalledStrikes))
 
 				// Check if should delete from bittorrent client
+				// Only delete if explicitly configured OR if progress is below safe_delete_progress threshold
 				shouldDelete := c.config.Stalled.DeleteTorrent
 				if !shouldDelete {
 					// Check if tracker allows safe deletion below progress threshold
@@ -507,9 +508,17 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 					if trackerConfig != nil && trackerConfig.SafeDeleteProgress > 0 {
 						// Progress is stored as 0.0-1.0, convert to percentage for comparison
 						progressPercent := torrent.Progress * 100
+						// Only delete if progress is BELOW the threshold (not equal to or above)
 						if progressPercent < trackerConfig.SafeDeleteProgress {
 							shouldDelete = true
 							c.logger.Info("Torrent marked for deletion due to safe_delete_progress threshold",
+								"cleaner", c.config.Name,
+								"torrent", torrent.Name,
+								"progress", progressPercent,
+								"safe_delete_progress", trackerConfig.SafeDeleteProgress,
+								"tracker", trackerConfig.Name)
+						} else {
+							c.logger.Info("Torrent NOT deleted from bittorrent client (progress above safe_delete_progress threshold)",
 								"cleaner", c.config.Name,
 								"torrent", torrent.Name,
 								"progress", progressPercent,
@@ -682,9 +691,17 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 	c.strikesMu.Unlock()
 
 	// Remove from *arr apps
+	// When removing, use "Ignore Download" (removeFromClient=false) if progress >= safe_delete_progress
+	// This prevents deletion from qBittorrent when progress is significant
 	arrRemovedCount := 0
 	for hash := range hashesToRemoveFromArr {
 		if queueItems, ok := arrQueueMap[hash]; ok {
+			// Get the torrent to check progress
+			torrent, exists := torrentMap[hash]
+			if !exists {
+				torrent, exists = torrentMapLower[strings.ToLower(hash)]
+			}
+
 			for _, qItem := range queueItems {
 				// Only remove from arr apps that are configured for this cleaner
 				if !c.isArrConfigured(qItem.arrID) {
@@ -700,12 +717,30 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 					blocklist = arrConfig.Blocklist
 				}
 
+				// Override removeFromClient if progress is >= safe_delete_progress threshold
+				// This ensures we use "Ignore Download" instead of removing from client
+				if exists && !removeFromClient {
+					trackerConfig := c.findTrackerConfig(torrent.Tracker)
+					if trackerConfig != nil && trackerConfig.SafeDeleteProgress > 0 {
+						progressPercent := torrent.Progress * 100
+						if progressPercent >= trackerConfig.SafeDeleteProgress {
+							// Progress is above threshold, use "Ignore Download" (don't remove from client)
+							removeFromClient = false
+							c.logger.Info("Using 'Ignore Download' for removal (progress above safe_delete_progress)",
+								"cleaner", c.config.Name,
+								"torrent", torrent.Name,
+								"progress", progressPercent,
+								"safe_delete_progress", trackerConfig.SafeDeleteProgress)
+						}
+					}
+				}
+
 				if c.config.DryRun {
 					c.logger.Info("DRY RUN - Would remove item from arr queue", "cleaner", c.config.Name, "item", qItem.item.Title, "item_id", qItem.item.ID, "arr_id", qItem.arrID, "remove_from_client", removeFromClient, "blocklist", blocklist)
 				} else {
 					arrClient := c.arrClients[qItem.arrID]
 					if arrClient != nil {
-						// Use removal options from arr config
+						// Use removal options (with override for high progress)
 						if err := arrClient.RemoveFromQueue(qItem.item.ID, removeFromClient, blocklist); err != nil {
 							c.logger.Warn("Failed to remove item from arr queue", "cleaner", c.config.Name, "item_id", qItem.item.ID, "arr_id", qItem.arrID, "error", err)
 							result.Errors = append(result.Errors, fmt.Sprintf("failed to remove from %s queue: %v", qItem.arrID, err))
