@@ -257,10 +257,24 @@ func (c *Cleaner) getOrCreateStrikes(hash string) *torrentStrikes {
 // This should NOT match stalled downloads - those are handled by the stalled check
 func isImportFailed(item QueueItem) bool {
 	// Check Status field - "error" or "failed" status indicates failure
-	// "warning" can be used for stalled downloads, so we need to check the actual message
 	statusLower := strings.ToLower(item.Status)
 	if statusLower == "error" || statusLower == "failed" {
 		return true
+	}
+
+	// Check ErrorMessage field for import failure indicators
+	// Lidarr uses "The download is missing files" for failed imports
+	if item.ErrorMessage != "" {
+		// Check for import-related error messages
+		if contains(item.ErrorMessage, "import", "parsing", "unable to parse", "cannot import", "failed to import",
+			"import error", "parsing error", "unable to import", "could not import", "failed import",
+			"missing files", "download is missing") {
+			// But exclude stalled/connection messages
+			if !contains(item.ErrorMessage, "stalled", "no connections", "connection", "timeout", "download stalled",
+				"downloading metadata", "queued") {
+				return true
+			}
+		}
 	}
 
 	// Check StatusMessages for specific import failure indicators
@@ -273,6 +287,11 @@ func isImportFailed(item QueueItem) bool {
 		   strings.Contains(title, "download failed") {
 			return true
 		}
+		// Lidarr-specific import failure indicators
+		if strings.Contains(title, "not imported") || strings.Contains(title, "missing from the release") ||
+		   strings.Contains(title, "fewer tracks than existing") || strings.Contains(title, "match is not close enough") {
+			return true
+		}
 		// Exclude "download warning" which is used for stalled downloads
 		if title == "download warning" {
 			continue
@@ -281,7 +300,8 @@ func isImportFailed(item QueueItem) bool {
 		for _, msg := range statusMsg.Messages {
 			// Look for import/parsing specific errors, not connection/stall issues
 			if contains(msg, "import", "parsing", "unable to parse", "cannot import", "failed to import",
-				"import error", "parsing error", "unable to import", "could not import", "failed import") {
+				"import error", "parsing error", "unable to import", "could not import", "failed import",
+				"not imported", "missing from the release", "fewer tracks", "match is not close enough") {
 				// But exclude stalled/connection messages
 				if !contains(msg, "stalled", "no connections", "connection", "timeout", "download stalled") {
 					return true
@@ -290,12 +310,24 @@ func isImportFailed(item QueueItem) bool {
 		}
 	}
 
-	// Check ErrorMessage field - but only if it's about import/parsing, not connection issues
-	if item.ErrorMessage != "" {
-		// Only treat as import failure if it's about import/parsing, not connection/stall
-		if contains(item.ErrorMessage, "import", "parsing", "unable to parse", "cannot import", "failed to import",
-			"import error", "parsing error", "unable to import", "could not import", "failed import") {
-			if !contains(item.ErrorMessage, "stalled", "no connections", "connection", "timeout", "download stalled") {
+	// Check for "warning" status combined with import-related error messages
+	// Lidarr uses "warning" status for failed imports (not "error")
+	if statusLower == "warning" {
+		// If error message indicates import failure, treat as failed import
+		if item.ErrorMessage != "" {
+			if contains(item.ErrorMessage, "missing files", "download is missing", "not imported", "missing from") {
+				// Exclude stalled/connection messages
+				if !contains(item.ErrorMessage, "stalled", "no connections", "connection", "timeout", "download stalled",
+					"downloading metadata", "queued") {
+					return true
+				}
+			}
+		}
+		// Check status messages for import failure indicators
+		for _, statusMsg := range item.StatusMessages {
+			title := strings.ToLower(statusMsg.Title)
+			if strings.Contains(title, "not imported") || strings.Contains(title, "missing from the release") ||
+			   strings.Contains(title, "fewer tracks than existing") || strings.Contains(title, "match is not close enough") {
 				return true
 			}
 		}
@@ -450,13 +482,13 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 			}
 		}
 
-		// Only process torrents that are downloading or stalled (not completed/seeding)
-		// Queue cleaner should only act on active downloads, not completed ones
-		if torrent.Progress >= 1.0 {
-			// Torrent is completed, skip it
-			c.logger.Debug("Skipping completed torrent", "torrent", torrent.Name, "state", torrent.State, "progress", torrent.Progress)
-			queueItemsFilteredOut++
-			continue
+		// Check if torrent is completed
+		isCompleted := torrent.Progress >= 1.0
+		
+		// Check for failed imports even if torrent is completed (failed imports can occur after download completes)
+		// But skip stalled/slow checks for completed torrents
+		if isCompleted {
+			c.logger.Debug("Torrent is completed, will only check for failed imports", "torrent", torrent.Name, "state", torrent.State, "progress", torrent.Progress)
 		}
 
 		// Collect sample states for debugging
@@ -488,8 +520,8 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 		normalizedHash := strings.ToLower(hash)
 		strikes := c.getOrCreateStrikes(normalizedHash)
 
-		// Check for stalled status
-		if c.config.Stalled != nil {
+		// Check for stalled status (only for non-completed torrents)
+		if c.config.Stalled != nil && !isCompleted {
 			// qBittorrent states: stalledDL, stalledUP, downloading, uploading, etc.
 			// Also check for "Stalled" status (capital S) which might be used in some versions
 			isStalled := torrent.State == "stalledDL" || torrent.State == "stalledUP" || torrent.State == "stalled" || strings.HasPrefix(strings.ToLower(torrent.State), "stalled")
@@ -567,11 +599,11 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 			}
 		}
 
-		// Check for slow download
+		// Check for slow download (only for non-completed torrents)
 		// Check any torrent that is downloading (not completed) and has download speed > 0
 		// This includes "downloading" state and "stalledDL" state (stalled but still downloading)
-		isDownloading := torrent.Progress < 1.0 && torrent.Dlspeed > 0
-		if c.config.Slow != nil && isDownloading && c.config.Slow.MinSpeed.Bytes() > 0 {
+		isDownloading := !isCompleted && torrent.Dlspeed > 0
+		if c.config.Slow != nil && !isCompleted && isDownloading && c.config.Slow.MinSpeed.Bytes() > 0 {
 			isSlow := torrent.Dlspeed < c.config.Slow.MinSpeed.Bytes()
 
 			// Always log speed info for stalledDL/downloading torrents to debug
