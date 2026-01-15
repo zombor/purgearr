@@ -361,7 +361,7 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 	}
 
 	if len(arrQueueMap) == 0 {
-		c.logger.Info("No queue items found in arr apps", "cleaner", c.config.Name)
+		c.logger.Info("No queue items found in arr apps", "cleaner", c.config.Name, "checked_arrs", len(c.arrClients))
 		return result, nil
 	}
 
@@ -657,15 +657,25 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 
 	c.logger.Info("Finished processing queue items", "cleaner", c.config.Name, "total_queue_items", totalQueueItems, "queue_items_filtered_out", queueItemsFilteredOut, "queue_items_processed", queueItemsProcessed, "queue_items_to_remove_from_arr", len(hashesToRemoveFromArr))
 
-	// Clean up strikes for queue items that no longer exist
-	// Use normalized hashes for comparison
+	// Clean up strikes for torrents that no longer exist in both the queue AND qBittorrent
+	// Don't clean up strikes for torrents that are still in qBittorrent but temporarily removed from queue
+	// This prevents strikes from being reset when Sonarr removes/re-adds stalled torrents
 	c.strikesMu.Lock()
 	normalizedArrHashes := make(map[string]bool)
 	for hash := range arrQueueMap {
 		normalizedArrHashes[strings.ToLower(hash)] = true
 	}
+	// Build normalized qBittorrent hashes map for checking if torrent still exists
+	normalizedQbtHashes := make(map[string]bool)
+	for hash := range torrentMap {
+		normalizedQbtHashes[strings.ToLower(hash)] = true
+	}
+	for hash := range torrentMapLower {
+		normalizedQbtHashes[hash] = true // Already lowercase
+	}
 	for hash := range c.strikes {
-		if !normalizedArrHashes[hash] {
+		// Only delete strikes if torrent is not in queue AND not in qBittorrent
+		if !normalizedArrHashes[hash] && !normalizedQbtHashes[hash] {
 			delete(c.strikes, hash)
 		}
 	}

@@ -63,34 +63,59 @@ type QueueResponse struct {
 }
 
 // GetQueue retrieves the current queue from Lidarr
+// Handles pagination to fetch all queue items
 func (c *Client) GetQueue() (*QueueResponse, error) {
-	url := fmt.Sprintf("%s/api/v1/queue", c.url)
+	var allRecords []QueueItem
+	page := 1
+	pageSize := 100 // Fetch up to 100 items per page
 	
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("creating request: %w", err)
+	for {
+		url := fmt.Sprintf("%s/api/v1/queue?page=%d&pageSize=%d", c.url, page, pageSize)
+		
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			return nil, fmt.Errorf("creating request: %w", err)
+		}
+
+		req.Header.Set("X-Api-Key", c.apiKey)
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := c.client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("making request: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			return nil, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(body))
+		}
+
+		var queue QueueResponse
+		if err := json.NewDecoder(resp.Body).Decode(&queue); err != nil {
+			return nil, fmt.Errorf("decoding response: %w", err)
+		}
+
+		// Append records from this page
+		allRecords = append(allRecords, queue.Records...)
+
+		// Check if we've fetched all records
+		if len(allRecords) >= queue.TotalRecords || len(queue.Records) == 0 {
+			break
+		}
+
+		page++
 	}
 
-	req.Header.Set("X-Api-Key", c.apiKey)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("making request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(body))
-	}
-
-	var queue QueueResponse
-	if err := json.NewDecoder(resp.Body).Decode(&queue); err != nil {
-		return nil, fmt.Errorf("decoding response: %w", err)
-	}
-
-	return &queue, nil
+	// Return a response with all records combined
+	return &QueueResponse{
+		Page:         1,
+		PageSize:     len(allRecords),
+		SortKey:      "",
+		SortDirection: "",
+		TotalRecords: len(allRecords),
+		Records:      allRecords,
+	}, nil
 }
 
 // RemoveFromQueue removes an item from Lidarr's queue

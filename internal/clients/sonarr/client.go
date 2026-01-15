@@ -11,9 +11,9 @@ import (
 
 // Client represents a Sonarr API client
 type Client struct {
-	url     string
-	apiKey  string
-	client  *http.Client
+	url    string
+	apiKey string
+	client *http.Client
 }
 
 // NewClient creates a new Sonarr client
@@ -29,26 +29,26 @@ func NewClient(url, apiKey string) *Client {
 
 // QueueItem represents an item in Sonarr's queue
 type QueueItem struct {
-	ID                    int       `json:"id"`
-	SeriesID              int       `json:"seriesId"`
-	EpisodeID             int       `json:"episodeId"`
-	Title                 string    `json:"title"`
-	Status                string    `json:"status"`
-	StatusMessages        []StatusMessage `json:"statusMessages"`
-	ErrorMessage          string    `json:"errorMessage"`
-	Timeleft              string    `json:"timeleft"`
-	EstimatedCompletionTime time.Time `json:"estimatedCompletionTime"`
-	Protocol              string    `json:"protocol"`
-	DownloadClient        string    `json:"downloadClient"`
-	DownloadID            string    `json:"downloadId"`
-	Size                  int64     `json:"size"`
-	Sizeleft              int64     `json:"sizeleft"`
-	DownloadedBytes       int64     `json:"downloadedBytes"`
+	ID                      int             `json:"id"`
+	SeriesID                int             `json:"seriesId"`
+	EpisodeID               int             `json:"episodeId"`
+	Title                   string          `json:"title"`
+	Status                  string          `json:"status"`
+	StatusMessages          []StatusMessage `json:"statusMessages"`
+	ErrorMessage            string          `json:"errorMessage"`
+	Timeleft                string          `json:"timeleft"`
+	EstimatedCompletionTime time.Time       `json:"estimatedCompletionTime"`
+	Protocol                string          `json:"protocol"`
+	DownloadClient          string          `json:"downloadClient"`
+	DownloadID              string          `json:"downloadId"`
+	Size                    int64           `json:"size"`
+	Sizeleft                int64           `json:"sizeleft"`
+	DownloadedBytes         int64           `json:"downloadedBytes"`
 }
 
 // StatusMessage represents a status message for a queue item
 type StatusMessage struct {
-	Title    string `json:"title"`
+	Title    string   `json:"title"`
 	Messages []string `json:"messages"`
 }
 
@@ -63,43 +63,69 @@ type QueueResponse struct {
 }
 
 // GetQueue retrieves the current queue from Sonarr
+// Handles pagination to fetch all queue items
 func (c *Client) GetQueue() (*QueueResponse, error) {
-	url := fmt.Sprintf("%s/api/v3/queue", c.url)
-	
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("creating request: %w", err)
+	var allRecords []QueueItem
+	page := 1
+	pageSize := 100 // Fetch up to 100 items per page
+
+	for {
+		// Include unknown status items to ensure stalled/warning items are included
+		url := fmt.Sprintf("%s/api/v3/queue?page=%d&pageSize=%d&includeUnknown=true", c.url, page, pageSize)
+
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			return nil, fmt.Errorf("creating request: %w", err)
+		}
+
+		req.Header.Set("X-Api-Key", c.apiKey)
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := c.client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("making request: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			return nil, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(body))
+		}
+
+		var queue QueueResponse
+		if err := json.NewDecoder(resp.Body).Decode(&queue); err != nil {
+			return nil, fmt.Errorf("decoding response: %w", err)
+		}
+
+		// Append records from this page
+		allRecords = append(allRecords, queue.Records...)
+
+		// Check if we've fetched all records
+		if len(allRecords) >= queue.TotalRecords || len(queue.Records) == 0 {
+			break
+		}
+
+		page++
 	}
 
-	req.Header.Set("X-Api-Key", c.apiKey)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("making request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(body))
-	}
-
-	var queue QueueResponse
-	if err := json.NewDecoder(resp.Body).Decode(&queue); err != nil {
-		return nil, fmt.Errorf("decoding response: %w", err)
-	}
-
-	return &queue, nil
+	// Return a response with all records combined
+	return &QueueResponse{
+		Page:          1,
+		PageSize:      len(allRecords),
+		SortKey:       "",
+		SortDirection: "",
+		TotalRecords:  len(allRecords),
+		Records:       allRecords,
+	}, nil
 }
 
 // RemoveFromQueue removes an item from Sonarr's queue
 func (c *Client) RemoveFromQueue(id int, removeFromClient bool, blocklist bool) error {
 	url := fmt.Sprintf("%s/api/v3/queue/%d", c.url, id)
-	
+
 	params := map[string]interface{}{
 		"removeFromClient": removeFromClient,
-		"blocklist":         blocklist,
+		"blocklist":        blocklist,
 	}
 
 	body, err := json.Marshal(params)
@@ -137,7 +163,7 @@ type SystemStatus struct {
 // GetSystemStatus checks if Sonarr is accessible
 func (c *Client) GetSystemStatus() (*SystemStatus, error) {
 	url := fmt.Sprintf("%s/api/v3/system/status", c.url)
-	
+
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
@@ -164,4 +190,3 @@ func (c *Client) GetSystemStatus() (*SystemStatus, error) {
 
 	return &status, nil
 }
-
