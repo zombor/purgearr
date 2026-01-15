@@ -256,9 +256,10 @@ func (c *Cleaner) getOrCreateStrikes(hash string) *torrentStrikes {
 // isImportFailed checks if an *arr queue item indicates import failure
 // This should NOT match stalled downloads - those are handled by the stalled check
 func isImportFailed(item QueueItem) bool {
-	// Check Status field - only "error" status indicates failure, not "warning"
+	// Check Status field - "error" or "failed" status indicates failure
 	// "warning" can be used for stalled downloads, so we need to check the actual message
-	if item.Status == "error" {
+	statusLower := strings.ToLower(item.Status)
+	if statusLower == "error" || statusLower == "failed" {
 		return true
 	}
 
@@ -266,8 +267,10 @@ func isImportFailed(item QueueItem) bool {
 	// Look for titles that specifically indicate import/download failure
 	for _, statusMsg := range item.StatusMessages {
 		title := strings.ToLower(statusMsg.Title)
-		// Check for specific failure titles
-		if title == "import failed" || title == "download failed" {
+		// Check for specific failure titles (case-insensitive)
+		if title == "import failed" || title == "download failed" || 
+		   title == "failed" || strings.Contains(title, "import failed") ||
+		   strings.Contains(title, "download failed") {
 			return true
 		}
 		// Exclude "download warning" which is used for stalled downloads
@@ -277,9 +280,10 @@ func isImportFailed(item QueueItem) bool {
 		// Check messages for import-specific failures
 		for _, msg := range statusMsg.Messages {
 			// Look for import/parsing specific errors, not connection/stall issues
-			if contains(msg, "import", "parsing", "unable to parse", "cannot import", "failed to import") {
+			if contains(msg, "import", "parsing", "unable to parse", "cannot import", "failed to import",
+				"import error", "parsing error", "unable to import", "could not import", "failed import") {
 				// But exclude stalled/connection messages
-				if !contains(msg, "stalled", "no connections", "connection", "timeout") {
+				if !contains(msg, "stalled", "no connections", "connection", "timeout", "download stalled") {
 					return true
 				}
 			}
@@ -289,8 +293,9 @@ func isImportFailed(item QueueItem) bool {
 	// Check ErrorMessage field - but only if it's about import/parsing, not connection issues
 	if item.ErrorMessage != "" {
 		// Only treat as import failure if it's about import/parsing, not connection/stall
-		if contains(item.ErrorMessage, "import", "parsing", "unable to parse", "cannot import", "failed to import") {
-			if !contains(item.ErrorMessage, "stalled", "no connections", "connection", "timeout") {
+		if contains(item.ErrorMessage, "import", "parsing", "unable to parse", "cannot import", "failed to import",
+			"import error", "parsing error", "unable to import", "could not import", "failed import") {
+			if !contains(item.ErrorMessage, "stalled", "no connections", "connection", "timeout", "download stalled") {
 				return true
 			}
 		}
@@ -337,6 +342,28 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 		if err != nil {
 			c.logger.Warn("Failed to get queue from arr app", "arr_id", arrID, "error", err)
 			continue
+		}
+
+		// Log all queue items for debugging (especially for Lidarr failed imports)
+		c.logger.Debug("Retrieved queue from arr app", "arr_id", arrID, "total_items", len(queue.Records))
+		for i, item := range queue.Records {
+			c.logger.Debug("Queue item details", 
+				"arr_id", arrID,
+				"item_index", i,
+				"item_id", item.ID,
+				"title", item.Title,
+				"status", item.Status,
+				"error_message", item.ErrorMessage,
+				"download_id", item.DownloadID,
+				"status_messages_count", len(item.StatusMessages))
+			for j, sm := range item.StatusMessages {
+				c.logger.Debug("Queue item status message", 
+					"arr_id", arrID,
+					"item_id", item.ID,
+					"message_index", j,
+					"title", sm.Title,
+					"messages", sm.Messages)
+			}
 		}
 
 		// Build map of download IDs (hashes) to queue items
@@ -437,6 +464,13 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 
 		// Check tracker filter
 		if !c.matchesTrackerFilter(torrent.Tracker) {
+			// Log why item was filtered out (for debugging failed imports)
+			c.logger.Debug("Queue item filtered out by tracker filter", 
+				"cleaner", c.config.Name,
+				"torrent", torrent.Name,
+				"tracker_url", torrent.Tracker,
+				"filter_mode", c.config.Trackers.FilterMode,
+				"configured_tracker_ids", c.config.Trackers.TrackerIDs)
 			queueItemsFilteredOut++
 			continue
 		}
@@ -614,8 +648,37 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 		if c.config.FailedImport != nil {
 			hasFailedImport := false
 			for _, qItem := range queueItems {
+				// Log queue item details for debugging failed imports
+				c.logger.Debug("Checking queue item for failed import", 
+					"cleaner", c.config.Name,
+					"torrent", torrent.Name,
+					"arr_id", qItem.arrID,
+					"item_id", qItem.item.ID,
+					"item_title", qItem.item.Title,
+					"status", qItem.item.Status,
+					"error_message", qItem.item.ErrorMessage,
+					"status_messages_count", len(qItem.item.StatusMessages))
+				
+				// Log status messages for debugging
+				for i, sm := range qItem.item.StatusMessages {
+					c.logger.Debug("Queue item status message", 
+						"cleaner", c.config.Name,
+						"torrent", torrent.Name,
+						"arr_id", qItem.arrID,
+						"message_index", i,
+						"title", sm.Title,
+						"messages", sm.Messages)
+				}
+				
 				if isImportFailed(qItem.item) {
 					hasFailedImport = true
+					c.logger.Info("Detected failed import", 
+						"cleaner", c.config.Name,
+						"torrent", torrent.Name,
+						"arr_id", qItem.arrID,
+						"item_id", qItem.item.ID,
+						"status", qItem.item.Status,
+						"error_message", qItem.item.ErrorMessage)
 					break
 				}
 			}
@@ -629,8 +692,12 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 			} else {
 				// Import not failed, reset strikes
 				c.strikesMu.Lock()
+				oldStrikes := strikes.failedImportStrikes
 				strikes.failedImportStrikes = 0
 				c.strikesMu.Unlock()
+				if oldStrikes > 0 {
+					c.logger.Info("Reset failed import strikes - import no longer failed", "cleaner", c.config.Name, "torrent", torrent.Name, "old_strikes", oldStrikes)
+				}
 			}
 
 			if strikes.failedImportStrikes >= c.config.FailedImport.Strikes {

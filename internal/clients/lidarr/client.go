@@ -69,7 +69,8 @@ func (c *Client) GetQueue() (*QueueResponse, error) {
 	pageSize := 100 // Fetch up to 100 items per page
 
 	for {
-		url := fmt.Sprintf("%s/api/v1/queue?page=%d&pageSize=%d", c.url, page, pageSize)
+		// Include unknown status items to ensure failed imports and other status items are included
+		url := fmt.Sprintf("%s/api/v1/queue?page=%d&pageSize=%d&includeUnknown=true", c.url, page, pageSize)
 
 		req, err := http.NewRequest("GET", url, nil)
 		if err != nil {
