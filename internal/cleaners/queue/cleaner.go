@@ -738,26 +738,71 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 				result.RemovedItems = append(result.RemovedItems, fmt.Sprintf("%s (failed import, %d strikes)", torrent.Name, strikes.failedImportStrikes))
 
 				// Check if should delete from bittorrent client
-				shouldDelete := c.config.FailedImport.DeleteTorrent
-				if !shouldDelete {
-					// Check if tracker allows safe deletion below progress threshold
-					trackerConfig := c.findTrackerConfig(torrent.Tracker)
-					if trackerConfig != nil && trackerConfig.SafeDeleteProgress > 0 {
-						// Progress is stored as 0.0-1.0, convert to percentage for comparison
-						progressPercent := torrent.Progress * 100
-						if progressPercent < trackerConfig.SafeDeleteProgress {
+				// Always respect safe_delete_progress threshold if configured, regardless of delete_torrent setting
+				shouldDelete := false
+				trackerConfig := c.findTrackerConfig(torrent.Tracker)
+				
+				if trackerConfig != nil && trackerConfig.SafeDeleteProgress > 0 {
+					// Progress is stored as 0.0-1.0, convert to percentage for comparison
+					progressPercent := torrent.Progress * 100
+					// Only delete if progress is below safe_delete_progress threshold
+					// AND delete_torrent is true (safe_delete_progress is a safety limit, not a requirement to delete)
+					if progressPercent < trackerConfig.SafeDeleteProgress {
+						// Check delete_torrent setting - if false, never delete
+						if c.config.FailedImport.DeleteTorrent {
 							shouldDelete = true
-							c.logger.Info("Torrent marked for deletion due to safe_delete_progress threshold",
+							c.logger.Info("Torrent marked for deletion (progress below safe_delete_progress threshold and delete_torrent is true)",
 								"cleaner", c.config.Name,
 								"torrent", torrent.Name,
 								"progress", progressPercent,
 								"safe_delete_progress", trackerConfig.SafeDeleteProgress,
-								"tracker", trackerConfig.Name)
+								"tracker", trackerConfig.Name,
+								"delete_torrent", c.config.FailedImport.DeleteTorrent)
+						} else {
+							c.logger.Info("Torrent NOT deleted - delete_torrent is false (progress below safe_delete_progress threshold)",
+								"cleaner", c.config.Name,
+								"torrent", torrent.Name,
+								"progress", progressPercent,
+								"safe_delete_progress", trackerConfig.SafeDeleteProgress,
+								"tracker", trackerConfig.Name,
+								"delete_torrent", c.config.FailedImport.DeleteTorrent)
 						}
+					} else {
+						// Progress is at or above threshold - never delete to avoid hit-and-run penalties
+						c.logger.Info("Torrent NOT deleted - progress above safe_delete_progress threshold (prevents hit-and-run)",
+							"cleaner", c.config.Name,
+							"torrent", torrent.Name,
+							"progress", progressPercent,
+							"safe_delete_progress", trackerConfig.SafeDeleteProgress,
+							"tracker", trackerConfig.Name,
+							"delete_torrent", c.config.FailedImport.DeleteTorrent)
+					}
+				} else {
+					// If no tracker config or no safe_delete_progress threshold, use delete_torrent setting
+					if c.config.FailedImport.DeleteTorrent {
+						shouldDelete = true
+						c.logger.Info("Torrent marked for deletion (no safe_delete_progress threshold configured)",
+							"cleaner", c.config.Name,
+							"torrent", torrent.Name,
+							"delete_torrent", c.config.FailedImport.DeleteTorrent,
+							"tracker_url", torrent.Tracker)
+					} else {
+						c.logger.Info("Torrent NOT deleted - delete_torrent is false (no safe_delete_progress threshold configured)",
+							"cleaner", c.config.Name,
+							"torrent", torrent.Name,
+							"delete_torrent", c.config.FailedImport.DeleteTorrent,
+							"tracker_url", torrent.Tracker)
 					}
 				}
+				
 				if shouldDelete {
 					hashesToDeleteFromClient[hash] = fmt.Sprintf("failed import (%d strikes)", strikes.failedImportStrikes)
+				} else {
+					c.logger.Debug("Torrent will NOT be deleted from bittorrent client",
+						"cleaner", c.config.Name,
+						"torrent", torrent.Name,
+						"shouldDelete", shouldDelete,
+						"delete_torrent", c.config.FailedImport.DeleteTorrent)
 				}
 			}
 		}
