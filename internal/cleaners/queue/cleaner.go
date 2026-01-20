@@ -170,6 +170,7 @@ type torrentStrikes struct {
 	stalledStrikes      int
 	slowStrikes         int
 	failedImportStrikes int
+	metaDLStrikes       int
 	lastProgress        float64 // Last known progress percentage
 	lastCheckTime       time.Time
 }
@@ -282,14 +283,14 @@ func isImportFailed(item QueueItem) bool {
 	for _, statusMsg := range item.StatusMessages {
 		title := strings.ToLower(statusMsg.Title)
 		// Check for specific failure titles (case-insensitive)
-		if title == "import failed" || title == "download failed" || 
-		   title == "failed" || strings.Contains(title, "import failed") ||
-		   strings.Contains(title, "download failed") {
+		if title == "import failed" || title == "download failed" ||
+			title == "failed" || strings.Contains(title, "import failed") ||
+			strings.Contains(title, "download failed") {
 			return true
 		}
 		// Lidarr-specific import failure indicators
 		if strings.Contains(title, "not imported") || strings.Contains(title, "missing from the release") ||
-		   strings.Contains(title, "fewer tracks than existing") || strings.Contains(title, "match is not close enough") {
+			strings.Contains(title, "fewer tracks than existing") || strings.Contains(title, "match is not close enough") {
 			return true
 		}
 		// Exclude "download warning" which is used for stalled downloads
@@ -327,7 +328,7 @@ func isImportFailed(item QueueItem) bool {
 		for _, statusMsg := range item.StatusMessages {
 			title := strings.ToLower(statusMsg.Title)
 			if strings.Contains(title, "not imported") || strings.Contains(title, "missing from the release") ||
-			   strings.Contains(title, "fewer tracks than existing") || strings.Contains(title, "match is not close enough") {
+				strings.Contains(title, "fewer tracks than existing") || strings.Contains(title, "match is not close enough") {
 				return true
 			}
 		}
@@ -379,7 +380,7 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 		// Log all queue items for debugging (especially for Lidarr failed imports)
 		c.logger.Debug("Retrieved queue from arr app", "arr_id", arrID, "total_items", len(queue.Records))
 		for i, item := range queue.Records {
-			c.logger.Debug("Queue item details", 
+			c.logger.Debug("Queue item details",
 				"arr_id", arrID,
 				"item_index", i,
 				"item_id", item.ID,
@@ -389,7 +390,7 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 				"download_id", item.DownloadID,
 				"status_messages_count", len(item.StatusMessages))
 			for j, sm := range item.StatusMessages {
-				c.logger.Debug("Queue item status message", 
+				c.logger.Debug("Queue item status message",
 					"arr_id", arrID,
 					"item_id", item.ID,
 					"message_index", j,
@@ -484,7 +485,7 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 
 		// Check if torrent is completed
 		isCompleted := torrent.Progress >= 1.0
-		
+
 		// Check for failed imports even if torrent is completed (failed imports can occur after download completes)
 		// But skip stalled/slow checks for completed torrents
 		if isCompleted {
@@ -497,7 +498,7 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 		// Check tracker filter
 		if !c.matchesTrackerFilter(torrent.Tracker) {
 			// Log why item was filtered out (for debugging failed imports)
-			c.logger.Debug("Queue item filtered out by tracker filter", 
+			c.logger.Debug("Queue item filtered out by tracker filter",
 				"cleaner", c.config.Name,
 				"torrent", torrent.Name,
 				"tracker_url", torrent.Tracker,
@@ -681,7 +682,7 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 			hasFailedImport := false
 			for _, qItem := range queueItems {
 				// Log queue item details for debugging failed imports
-				c.logger.Debug("Checking queue item for failed import", 
+				c.logger.Debug("Checking queue item for failed import",
 					"cleaner", c.config.Name,
 					"torrent", torrent.Name,
 					"arr_id", qItem.arrID,
@@ -690,10 +691,10 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 					"status", qItem.item.Status,
 					"error_message", qItem.item.ErrorMessage,
 					"status_messages_count", len(qItem.item.StatusMessages))
-				
+
 				// Log status messages for debugging
 				for i, sm := range qItem.item.StatusMessages {
-					c.logger.Debug("Queue item status message", 
+					c.logger.Debug("Queue item status message",
 						"cleaner", c.config.Name,
 						"torrent", torrent.Name,
 						"arr_id", qItem.arrID,
@@ -701,10 +702,10 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 						"title", sm.Title,
 						"messages", sm.Messages)
 				}
-				
+
 				if isImportFailed(qItem.item) {
 					hasFailedImport = true
-					c.logger.Info("Detected failed import", 
+					c.logger.Info("Detected failed import",
 						"cleaner", c.config.Name,
 						"torrent", torrent.Name,
 						"arr_id", qItem.arrID,
@@ -741,7 +742,7 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 				// Always respect safe_delete_progress threshold if configured, regardless of delete_torrent setting
 				shouldDelete := false
 				trackerConfig := c.findTrackerConfig(torrent.Tracker)
-				
+
 				if trackerConfig != nil && trackerConfig.SafeDeleteProgress > 0 {
 					// Progress is stored as 0.0-1.0, convert to percentage for comparison
 					progressPercent := torrent.Progress * 100
@@ -794,7 +795,7 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 							"tracker_url", torrent.Tracker)
 					}
 				}
-				
+
 				if shouldDelete {
 					hashesToDeleteFromClient[hash] = fmt.Sprintf("failed import (%d strikes)", strikes.failedImportStrikes)
 				} else {
@@ -803,6 +804,67 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 						"torrent", torrent.Name,
 						"shouldDelete", shouldDelete,
 						"delete_torrent", c.config.FailedImport.DeleteTorrent)
+				}
+			}
+		}
+
+		// Check for metaDL status (only for qbittorrent, only for non-completed torrents)
+		// metaDL means the torrent is downloading metadata
+		if c.config.MetaDL != nil && c.qbtClient != nil && !isCompleted {
+			// qBittorrent state: "metaDL" indicates downloading metadata
+			isMetaDL := torrent.State == "metaDL"
+
+			if isMetaDL {
+				c.strikesMu.Lock()
+				strikes.metaDLStrikes++
+				currentStrikes := strikes.metaDLStrikes
+				c.strikesMu.Unlock()
+				c.logger.Info("Incremented metaDL strikes", "cleaner", c.config.Name, "torrent", torrent.Name, "state", torrent.State, "strikes", currentStrikes, "threshold", c.config.MetaDL.Strikes)
+			} else {
+				// Not in metaDL state, reset strikes
+				c.strikesMu.Lock()
+				oldStrikes := strikes.metaDLStrikes
+				strikes.metaDLStrikes = 0
+				c.strikesMu.Unlock()
+				if oldStrikes > 0 {
+					c.logger.Info("Reset metaDL strikes - no longer in metaDL state", "cleaner", c.config.Name, "torrent", torrent.Name, "old_strikes", oldStrikes, "current_state", torrent.State)
+				}
+			}
+
+			if strikes.metaDLStrikes >= c.config.MetaDL.Strikes {
+				hashesToRemoveFromArr[hash] = true
+				c.logger.Info("Torrent marked for removal from arr (metaDL)", "cleaner", c.config.Name, "torrent", torrent.Name, "strikes", strikes.metaDLStrikes)
+				result.RemovedItems = append(result.RemovedItems, fmt.Sprintf("%s (metaDL, %d strikes)", torrent.Name, strikes.metaDLStrikes))
+
+				// Check if should delete from bittorrent client
+				shouldDelete := c.config.MetaDL.DeleteTorrent
+				if !shouldDelete {
+					// Check if tracker allows safe deletion below progress threshold
+					trackerConfig := c.findTrackerConfig(torrent.Tracker)
+					if trackerConfig != nil && trackerConfig.SafeDeleteProgress > 0 {
+						// Progress is stored as 0.0-1.0, convert to percentage for comparison
+						progressPercent := torrent.Progress * 100
+						// Only delete if progress is BELOW the threshold (not equal to or above)
+						if progressPercent < trackerConfig.SafeDeleteProgress {
+							shouldDelete = true
+							c.logger.Info("Torrent marked for deletion due to safe_delete_progress threshold",
+								"cleaner", c.config.Name,
+								"torrent", torrent.Name,
+								"progress", progressPercent,
+								"safe_delete_progress", trackerConfig.SafeDeleteProgress,
+								"tracker", trackerConfig.Name)
+						} else {
+							c.logger.Info("Torrent NOT deleted from bittorrent client (progress above safe_delete_progress threshold)",
+								"cleaner", c.config.Name,
+								"torrent", torrent.Name,
+								"progress", progressPercent,
+								"safe_delete_progress", trackerConfig.SafeDeleteProgress,
+								"tracker", trackerConfig.Name)
+						}
+					}
+				}
+				if shouldDelete {
+					hashesToDeleteFromClient[hash] = fmt.Sprintf("metaDL (%d strikes)", strikes.metaDLStrikes)
 				}
 			}
 		}
@@ -940,21 +1002,23 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 
 // TorrentStatus represents the status of a torrent with strikes
 type TorrentStatus struct {
-	Hash              string  `json:"hash"`
-	Name              string  `json:"name"`
-	State             string  `json:"state"`
-	Progress          float64 `json:"progress"`
-	Dlspeed           int64   `json:"dlspeed"`
-	Upspeed           int64   `json:"upspeed"`
-	Tracker           string  `json:"tracker"`
-	StalledStrikes    int     `json:"stalled_strikes"`
-	SlowStrikes       int     `json:"slow_strikes"`
-	FailedImportStrikes int   `json:"failed_import_strikes"`
-	StalledThreshold  *int    `json:"stalled_threshold,omitempty"`
-	SlowThreshold     *int    `json:"slow_threshold,omitempty"`
-	FailedImportThreshold *int `json:"failed_import_threshold,omitempty"`
-	LastProgress      float64 `json:"last_progress"`
-	LastCheckTime     time.Time `json:"last_check_time"`
+	Hash                  string    `json:"hash"`
+	Name                  string    `json:"name"`
+	State                 string    `json:"state"`
+	Progress              float64   `json:"progress"`
+	Dlspeed               int64     `json:"dlspeed"`
+	Upspeed               int64     `json:"upspeed"`
+	Tracker               string    `json:"tracker"`
+	StalledStrikes        int       `json:"stalled_strikes"`
+	SlowStrikes           int       `json:"slow_strikes"`
+	FailedImportStrikes   int       `json:"failed_import_strikes"`
+	MetaDLStrikes         int       `json:"metaDL_strikes"`
+	StalledThreshold      *int      `json:"stalled_threshold,omitempty"`
+	SlowThreshold         *int      `json:"slow_threshold,omitempty"`
+	FailedImportThreshold *int      `json:"failed_import_threshold,omitempty"`
+	MetaDLThreshold       *int      `json:"metaDL_threshold,omitempty"`
+	LastProgress          float64   `json:"last_progress"`
+	LastCheckTime         time.Time `json:"last_check_time"`
 }
 
 // GetStrikesStatus returns the current status of all torrents with strikes
@@ -1002,6 +1066,7 @@ func (c *Cleaner) GetStrikesStatus() ([]TorrentStatus, error) {
 			StalledStrikes:      strikes.stalledStrikes,
 			SlowStrikes:         strikes.slowStrikes,
 			FailedImportStrikes: strikes.failedImportStrikes,
+			MetaDLStrikes:       strikes.metaDLStrikes,
 			LastProgress:        strikes.lastProgress,
 			LastCheckTime:       strikes.lastCheckTime,
 		}
@@ -1018,6 +1083,10 @@ func (c *Cleaner) GetStrikesStatus() ([]TorrentStatus, error) {
 		if c.config.FailedImport != nil {
 			threshold := c.config.FailedImport.Strikes
 			status.FailedImportThreshold = &threshold
+		}
+		if c.config.MetaDL != nil {
+			threshold := c.config.MetaDL.Strikes
+			status.MetaDLThreshold = &threshold
 		}
 
 		result = append(result, status)

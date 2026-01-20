@@ -142,6 +142,10 @@
             background: #ff4757;
             color: white;
         }
+        .strike-metadl {
+            background: #9b59b6;
+            color: white;
+        }
         .strike-none {
             background: #2d5016;
             color: #90ee90;
@@ -480,7 +484,7 @@
                     
                     for (const torrent of torrents) {
                         const isStalled = torrent.state === 'stalledDL' || torrent.state === 'stalledUP' || torrent.state === 'stalled';
-                        const hasStrikes = torrent.stalled_strikes > 0 || torrent.slow_strikes > 0 || torrent.failed_import_strikes > 0;
+                        const hasStrikes = torrent.stalled_strikes > 0 || torrent.slow_strikes > 0 || torrent.failed_import_strikes > 0 || (torrent.metaDL_strikes || 0) > 0;
                         
                         html += `
                             <div class="torrent-item" style="border-left-color: ${hasStrikes ? '#ff6b6b' : '#4a9eff'}">
@@ -521,6 +525,11 @@
                                     ${torrent.failed_import_threshold !== null ? `
                                         <div class="strike-item ${torrent.failed_import_strikes > 0 ? 'strike-failed' : 'strike-none'}">
                                             Failed Import: ${torrent.failed_import_strikes}/${torrent.failed_import_threshold}
+                                        </div>
+                                    ` : ''}
+                                    ${torrent.metaDL_threshold !== null && torrent.metaDL_threshold !== undefined ? `
+                                        <div class="strike-item ${(torrent.metaDL_strikes || 0) > 0 ? 'strike-metadl' : 'strike-none'}">
+                                            MetaDL: ${torrent.metaDL_strikes || 0}/${torrent.metaDL_threshold}
                                         </div>
                                     ` : ''}
                                 </div>

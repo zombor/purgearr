@@ -284,6 +284,7 @@ type QueueCleanerConfig struct {
 	Stalled      *StrikeConfig    `yaml:"stalled" json:"stalled"`             // Stalled torrent configuration
 	Slow         *StrikeConfig    `yaml:"slow" json:"slow"`                   // Slow download configuration (requires min_speed)
 	FailedImport *StrikeConfig    `yaml:"failed_import" json:"failed_import"` // Failed import configuration
+	MetaDL       *StrikeConfig    `yaml:"metaDL" json:"metaDL"`               // MetaDL (downloading metadata) configuration (qbittorrent only)
 	Trackers     TrackerSelection `yaml:"trackers" json:"trackers"`           // Tracker filtering configuration
 }
 
@@ -513,6 +514,11 @@ func (qc *QueueCleanerConfig) Validate(arrIDs, bittorrentClientIDs, trackerIDs m
 	if qc.FailedImport != nil {
 		if qc.FailedImport.Strikes <= 0 {
 			return fmt.Errorf("failed_import.strikes must be greater than 0")
+		}
+	}
+	if qc.MetaDL != nil {
+		if qc.MetaDL.Strikes <= 0 {
+			return fmt.Errorf("metaDL.strikes must be greater than 0")
 		}
 	}
 
