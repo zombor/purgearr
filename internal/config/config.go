@@ -255,6 +255,12 @@ type TrackerSelection struct {
 	FilterMode string   `yaml:"filter_mode"` // "include" or "exclude" (empty = no filtering)
 }
 
+// CategorySelection defines which categories a cleaner should filter on
+type CategorySelection struct {
+	CategoryNames []string `yaml:"category_names"` // Array of category names to include/exclude
+	FilterMode    string   `yaml:"filter_mode"`    // "include" or "exclude" (empty = no filtering)
+}
+
 // MalwareBlockerConfig defines malware blocker settings
 type MalwareBlockerConfig struct {
 	Enabled  bool             `yaml:"enabled"`  // Enable/disable malware blocker
@@ -303,6 +309,7 @@ type DownloadCleanerConfig struct {
 	Schedule       string           `yaml:"schedule" json:"schedule"`                 // cron-like schedule (e.g., "every 1h")
 	Clients        ClientSelection  `yaml:"clients" json:"clients"`                   // Client selection (empty arrays = use all enabled)
 	Trackers       TrackerSelection `yaml:"trackers" json:"trackers"`                 // Tracker filtering configuration
+	Categories     CategorySelection `yaml:"categories" json:"categories"`            // Category filtering configuration
 	MaxRatio       float64          `yaml:"max_ratio" json:"max_ratio"`               // Maximum ratio - clean when reached (if min requirements met)
 	MaxSeedingTime Duration         `yaml:"max_seeding_time" json:"max_seeding_time"` // Maximum seeding time - clean when reached (if min requirements met)
 	DeleteFiles    bool             `yaml:"delete_files" json:"delete_files"`         // If true, delete files along with torrents
@@ -563,6 +570,9 @@ func (dc *DownloadCleanerConfig) Validate(arrIDs, bittorrentClientIDs, trackerID
 	// Note: download cleaners don't need arr clients (they work on completed torrents)
 	if dc.Trackers.FilterMode != "" && dc.Trackers.FilterMode != "include" && dc.Trackers.FilterMode != "exclude" {
 		return fmt.Errorf("trackers.filter_mode must be 'include' or 'exclude'")
+	}
+	if dc.Categories.FilterMode != "" && dc.Categories.FilterMode != "include" && dc.Categories.FilterMode != "exclude" {
+		return fmt.Errorf("categories.filter_mode must be 'include' or 'exclude'")
 	}
 
 	// Validate max_ratio and max_seeding_time

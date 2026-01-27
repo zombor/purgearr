@@ -73,7 +73,14 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 	for i, t := range c.trackers {
 		trackerIDs[i] = t.ID
 	}
-	c.logger.Info("Starting download cleaner run", "cleaner", c.config.Name, "total_torrents", len(torrents), "configured_trackers", trackerIDs, "filter_mode", c.config.Trackers.FilterMode, "tracker_ids_from_config", c.config.Trackers.TrackerIDs)
+	c.logger.Info("Starting download cleaner run", 
+		"cleaner", c.config.Name, 
+		"total_torrents", len(torrents), 
+		"configured_trackers", trackerIDs, 
+		"tracker_filter_mode", c.config.Trackers.FilterMode, 
+		"tracker_ids_from_config", c.config.Trackers.TrackerIDs,
+		"category_names", c.config.Categories.CategoryNames,
+		"category_filter_mode", c.config.Categories.FilterMode)
 
 	hashesToDelete := []string{}
 	hashesToPause := []string{} // Torrents to pause when min_progress prevents deletion
@@ -94,6 +101,12 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 
 		// Check tracker filter
 		if !c.matchesTrackerFilter(torrent.Tracker) {
+			torrentsFilteredOut++
+			continue
+		}
+
+		// Check category filter
+		if !c.matchesCategoryFilter(torrent.Category) {
 			torrentsFilteredOut++
 			continue
 		}
@@ -262,6 +275,29 @@ func (c *Cleaner) matchesTrackerFilter(trackerURL string) bool {
 	}
 
 	if c.config.Trackers.FilterMode == "include" {
+		return matches
+	}
+	// exclude mode
+	return !matches
+}
+
+// matchesCategoryFilter checks if a category matches the configured category filters
+func (c *Cleaner) matchesCategoryFilter(category string) bool {
+	// If no categories configured, match all
+	if len(c.config.Categories.CategoryNames) == 0 {
+		return true
+	}
+
+	// Check if category matches any of the configured category names
+	matches := false
+	for _, categoryName := range c.config.Categories.CategoryNames {
+		if category == categoryName {
+			matches = true
+			break
+		}
+	}
+
+	if c.config.Categories.FilterMode == "include" {
 		return matches
 	}
 	// exclude mode
