@@ -26,6 +26,7 @@ func SetupRoutes(mux *http.ServeMux, handler *Handler) {
 	mux.HandleFunc("GET /api/v1/clients/lidarr/test", handler.TestLidarrConnection)
 	mux.HandleFunc("GET /api/v1/clients/qbittorrent/test", handler.TestQBittorrentConnection)
 	mux.HandleFunc("GET /api/v1/torrents/status", handler.GetTorrentStatus)
+	mux.HandleFunc("GET /api/v1/cleaners/download/{id}/status", handler.GetDownloadCleanerStatus)
 	mux.HandleFunc("GET /api/v1/health", handler.HealthCheck)
 
 	// Web routes are handled by WrapMuxWithWebHandler

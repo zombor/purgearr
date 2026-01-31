@@ -24,6 +24,21 @@
             margin-bottom: 30px;
             color: #4a9eff;
         }
+        h1 a {
+            color: #4a9eff;
+            text-decoration: none;
+        }
+        h1 a:hover {
+            color: #5aaeff;
+        }
+        .clickable {
+            cursor: pointer;
+            color: #6ab7ff;
+        }
+        .clickable:hover {
+            color: #7ab8ff;
+            text-decoration: underline;
+        }
         .section {
             background: #2a2a2a;
             border-radius: 8px;
@@ -160,8 +175,8 @@
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>Purgearr</h1>
+    <div class="container" id="main-container">
+        <h1><a href="#" onclick="showHome(); return false;">Purgearr</a></h1>
         
         <div class="section">
             <h2>Status</h2>
@@ -200,6 +215,17 @@
             <button onclick="testLidarr()">Test Lidarr</button>
             <button onclick="testQBittorrent()">Test qBittorrent</button>
             <div id="client-status"></div>
+        </div>
+    </div>
+
+    <div class="container" id="cleaner-detail-container" style="display: none;">
+        <h1><a href="#" onclick="showHome(); return false;">Purgearr</a></h1>
+        
+        <div class="section">
+            <h2 id="cleaner-detail-name">Download Cleaner Status</h2>
+            <button onclick="showHome()">Back</button>
+            <button onclick="const id = document.getElementById('cleaner-detail-name').getAttribute('data-cleaner-id'); if (id) loadDownloadCleanerStatus(id);">Refresh</button>
+            <div id="cleaner-detail-content"></div>
         </div>
     </div>
 
@@ -344,7 +370,7 @@
                         const jobItem = `
                             <div class="job-item">
                                 <div class="job-info">
-                                    <div class="job-name">${jobName}</div>
+                                    <div class="job-name clickable" onclick="showDownloadCleanerStatus('${configId}', '${jobName}')">${jobName}</div>
                                     <div class="job-details">
                                         Schedule: ${jobData.schedule || 'N/A'} | 
                                         Last Run: ${jobData.last_run ? new Date(jobData.last_run).toLocaleString() : 'Never'} | 
@@ -545,6 +571,131 @@
                 }
             } catch (error) {
                 document.getElementById('torrent-status').innerHTML = 
+                    `<div class="status error">Error: ${error.message}</div>`;
+            }
+        }
+
+        function showHome() {
+            document.getElementById('main-container').style.display = 'block';
+            document.getElementById('cleaner-detail-container').style.display = 'none';
+        }
+
+        function showDownloadCleanerStatus(id, name) {
+            document.getElementById('main-container').style.display = 'none';
+            document.getElementById('cleaner-detail-container').style.display = 'block';
+            const nameElement = document.getElementById('cleaner-detail-name');
+            nameElement.textContent = name;
+            nameElement.setAttribute('data-cleaner-id', id);
+            loadDownloadCleanerStatus(id);
+        }
+
+        function formatDuration(seconds) {
+            if (seconds < 0) {
+                return 'Eligible for cleaning';
+            }
+            if (seconds === 0) {
+                return 'Now';
+            }
+            const days = Math.floor(seconds / 86400);
+            const hours = Math.floor((seconds % 86400) / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            const secs = seconds % 60;
+            
+            const parts = [];
+            if (days > 0) parts.push(`${days}d`);
+            if (hours > 0) parts.push(`${hours}h`);
+            if (minutes > 0) parts.push(`${minutes}m`);
+            if (secs > 0 && parts.length === 0) parts.push(`${secs}s`);
+            
+            return parts.join(' ') || 'Now';
+        }
+
+        async function loadDownloadCleanerStatus(id) {
+            try {
+                const candidates = await apiCall(`/cleaners/download/${id}/status`);
+                const container = document.getElementById('cleaner-detail-content');
+                
+                if (!candidates || candidates.length === 0) {
+                    container.innerHTML = '<div class="status">No candidate torrents found</div>';
+                    return;
+                }
+
+                let html = '';
+                for (const torrent of candidates) {
+                    const seedingTimeFormatted = formatDuration(torrent.seeding_time);
+                    const timeUntilCleanFormatted = formatDuration(torrent.time_until_clean);
+                    const maxSeedingFormatted = torrent.cleaner_max_seeding > 0 ? formatDuration(torrent.cleaner_max_seeding) : 'N/A';
+                    
+                    // Format time until max ratio
+                    let timeUntilMaxRatioFormatted = 'N/A';
+                    if (torrent.time_until_max_ratio === -1) {
+                        timeUntilMaxRatioFormatted = 'Reached';
+                    } else if (torrent.time_until_max_ratio === 0) {
+                        timeUntilMaxRatioFormatted = 'N/A';
+                    } else if (torrent.time_until_max_ratio > 0 && torrent.time_until_max_ratio < 999999999) {
+                        timeUntilMaxRatioFormatted = formatDuration(torrent.time_until_max_ratio);
+                    } else if (torrent.time_until_max_ratio >= 999999999) {
+                        timeUntilMaxRatioFormatted = 'Unknown (no upload)';
+                    }
+                    
+                    // Format time until max seeding
+                    let timeUntilMaxSeedingFormatted = 'N/A';
+                    if (torrent.time_until_max_seeding === -1) {
+                        timeUntilMaxSeedingFormatted = 'Reached';
+                    } else if (torrent.time_until_max_seeding === 0) {
+                        timeUntilMaxSeedingFormatted = 'N/A';
+                    } else if (torrent.time_until_max_seeding > 0) {
+                        timeUntilMaxSeedingFormatted = formatDuration(torrent.time_until_max_seeding);
+                    }
+                    
+                    html += `
+                        <div class="torrent-item">
+                            <div class="torrent-name">${torrent.name}</div>
+                            <div class="torrent-info">
+                                <div class="torrent-info-item">
+                                    <span class="torrent-info-label">Torrent Ratio</span>
+                                    <span class="torrent-info-value">${torrent.ratio.toFixed(2)}</span>
+                                </div>
+                                <div class="torrent-info-item">
+                                    <span class="torrent-info-label">Torrent Seeding Time</span>
+                                    <span class="torrent-info-value">${seedingTimeFormatted}</span>
+                                </div>
+                                <div class="torrent-info-item">
+                                    <span class="torrent-info-label">Tracker</span>
+                                    <span class="torrent-info-value">${torrent.tracker_name}</span>
+                                </div>
+                                <div class="torrent-info-item">
+                                    <span class="torrent-info-label">Tracker Min Ratio</span>
+                                    <span class="torrent-info-value">${torrent.tracker_min_ratio.toFixed(2)}</span>
+                                </div>
+                                <div class="torrent-info-item">
+                                    <span class="torrent-info-label">Cleaner Max Ratio</span>
+                                    <span class="torrent-info-value">${torrent.cleaner_max_ratio > 0 ? torrent.cleaner_max_ratio.toFixed(2) : 'N/A'}</span>
+                                </div>
+                                <div class="torrent-info-item">
+                                    <span class="torrent-info-label">Cleaner Max Seeding Time</span>
+                                    <span class="torrent-info-value">${maxSeedingFormatted}</span>
+                                </div>
+                                <div class="torrent-info-item">
+                                    <span class="torrent-info-label">Time Until Max Ratio</span>
+                                    <span class="torrent-info-value" style="color: ${torrent.time_until_max_ratio === -1 ? '#90ee90' : (torrent.time_until_max_ratio >= 999999999 ? '#888' : '#e0e0e0')}">${timeUntilMaxRatioFormatted}</span>
+                                </div>
+                                <div class="torrent-info-item">
+                                    <span class="torrent-info-label">Time Until Max Seeding</span>
+                                    <span class="torrent-info-value" style="color: ${torrent.time_until_max_seeding === -1 ? '#90ee90' : '#e0e0e0'}">${timeUntilMaxSeedingFormatted}</span>
+                                </div>
+                                <div class="torrent-info-item">
+                                    <span class="torrent-info-label">Time Until Clean (whichever first)</span>
+                                    <span class="torrent-info-value" style="color: ${torrent.time_until_clean < 0 ? '#90ee90' : '#ffa500'}">${timeUntilCleanFormatted}</span>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }
+                
+                container.innerHTML = html;
+            } catch (error) {
+                document.getElementById('cleaner-detail-content').innerHTML = 
                     `<div class="status error">Error: ${error.message}</div>`;
             }
         }

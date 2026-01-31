@@ -14,6 +14,7 @@ import (
 	"github.com/zombor/purgearr/internal/clients/sonarr"
 	"github.com/zombor/purgearr/internal/config"
 	queuecleaner "github.com/zombor/purgearr/internal/cleaners/queue"
+	downloadcleaner "github.com/zombor/purgearr/internal/cleaners/download"
 	"github.com/zombor/purgearr/internal/scheduler"
 )
 
@@ -335,6 +336,48 @@ func (h *Handler) GetTorrentStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(allStatuses); err != nil {
 		h.logger.Error("Error encoding torrent status", "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+}
+
+// GetDownloadCleanerStatus returns candidate torrents for a download cleaner
+func (h *Handler) GetDownloadCleanerStatus(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		http.Error(w, "Missing cleaner ID", http.StatusBadRequest)
+		return
+	}
+
+	// Prefix the ID with "download-" to match the job ID format
+	jobID := "download-" + id
+	
+	// Get the job from scheduler
+	job, ok := h.scheduler.GetJob(jobID)
+	if !ok {
+		http.Error(w, "Download cleaner not found", http.StatusNotFound)
+		return
+	}
+
+	// Type assert to download.Job
+	downloadJob, ok := job.(*downloadcleaner.Job)
+	if !ok {
+		http.Error(w, "Invalid job type", http.StatusInternalServerError)
+		return
+	}
+
+	// Get the cleaner and its candidate torrents
+	cleaner := downloadJob.GetCleaner()
+	candidates, err := cleaner.GetCandidateTorrents()
+	if err != nil {
+		h.logger.Error("Failed to get candidate torrents", "cleaner", id, "error", err)
+		http.Error(w, fmt.Sprintf("Failed to get candidate torrents: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(candidates); err != nil {
+		h.logger.Error("Error encoding download cleaner status", "error", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
