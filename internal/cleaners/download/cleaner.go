@@ -74,11 +74,11 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 	for i, t := range c.trackers {
 		trackerIDs[i] = t.ID
 	}
-	c.logger.Info("Starting download cleaner run", 
-		"cleaner", c.config.Name, 
-		"total_torrents", len(torrents), 
-		"configured_trackers", trackerIDs, 
-		"tracker_filter_mode", c.config.Trackers.FilterMode, 
+	c.logger.Info("Starting download cleaner run",
+		"cleaner", c.config.Name,
+		"total_torrents", len(torrents),
+		"configured_trackers", trackerIDs,
+		"tracker_filter_mode", c.config.Trackers.FilterMode,
 		"tracker_ids_from_config", c.config.Trackers.TrackerIDs,
 		"category_names", c.config.Categories.CategoryNames,
 		"category_filter_mode", c.config.Categories.FilterMode)
@@ -116,7 +116,7 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 
 		// Find the tracker config for this torrent
 		tracker := c.findTrackerConfig(torrent.Tracker)
-		
+
 		// If no tracker config found and filter_mode is exclude, use default values (no min requirements)
 		// This allows processing torrents from trackers not in the exclude list
 		var minRatio float64 = 0
@@ -135,19 +135,20 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 
 		seedingDuration := time.Duration(torrent.SeedingTime) * time.Second
 
-		// Check if minimum requirements are met (must be met before deletion is allowed)
+		// Check if minimum requirements are met (OR logic - either min ratio OR min seeding time must be met)
 		minRatioMet := minRatio == 0 || torrent.Ratio >= minRatio
 		minSeedingTimeMet := minSeedingTime.Duration() == 0 || seedingDuration >= minSeedingTime.Duration()
 
-		if !minRatioMet || !minSeedingTimeMet {
-			// Minimum requirements not met - do not delete
+		// At least one minimum requirement must be met (OR logic)
+		if !minRatioMet && !minSeedingTimeMet {
+			// Neither minimum requirement met - do not delete
 			trackerName := "unknown"
 			if tracker != nil {
 				trackerName = tracker.Name
 			}
-			c.logger.Debug("Skipping torrent - minimum requirements not met", 
-				"cleaner", c.config.Name, 
-				"torrent", torrent.Name, 
+			c.logger.Debug("Skipping torrent - minimum requirements not met",
+				"cleaner", c.config.Name,
+				"torrent", torrent.Name,
 				"tracker", trackerName,
 				"ratio", torrent.Ratio,
 				"min_ratio", minRatio,
@@ -198,10 +199,10 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 			if torrent.Progress < trackerConfig.MinProgress {
 				// Pause instead of deleting
 				hashesToPause = append(hashesToPause, hash)
-				c.logger.Info("Pausing torrent instead of deleting due to tracker min_progress", 
-					"cleaner", c.config.Name, 
-					"torrent", torrent.Name, 
-					"progress", torrent.Progress, 
+				c.logger.Info("Pausing torrent instead of deleting due to tracker min_progress",
+					"cleaner", c.config.Name,
+					"torrent", torrent.Name,
+					"progress", torrent.Progress,
 					"min_progress", trackerConfig.MinProgress,
 					"tracker", trackerConfig.Name)
 				continue
@@ -307,18 +308,18 @@ func (c *Cleaner) matchesCategoryFilter(category string) bool {
 
 // CandidateTorrent represents a torrent that is a candidate for cleaning
 type CandidateTorrent struct {
-	Hash                  string  `json:"hash"`
-	Name                  string  `json:"name"`
-	Ratio                 float64 `json:"ratio"`
-	SeedingTime           int64   `json:"seeding_time"` // in seconds
-	Tracker               string  `json:"tracker"`
-	TrackerName           string  `json:"tracker_name"`
-	TrackerMinRatio       float64 `json:"tracker_min_ratio"`
-	CleanerMaxRatio       float64 `json:"cleaner_max_ratio"`
-	CleanerMaxSeeding     int64   `json:"cleaner_max_seeding"` // in seconds
-	TimeUntilMaxRatio     int64   `json:"time_until_max_ratio"`     // in seconds, -1 if already reached or not applicable
-	TimeUntilMaxSeeding   int64   `json:"time_until_max_seeding"`   // in seconds, -1 if already reached or not applicable
-	TimeUntilClean        int64   `json:"time_until_clean"`    // in seconds, negative if already eligible
+	Hash                string  `json:"hash"`
+	Name                string  `json:"name"`
+	Ratio               float64 `json:"ratio"`
+	SeedingTime         int64   `json:"seeding_time"` // in seconds
+	Tracker             string  `json:"tracker"`
+	TrackerName         string  `json:"tracker_name"`
+	TrackerMinRatio     float64 `json:"tracker_min_ratio"`
+	CleanerMaxRatio     float64 `json:"cleaner_max_ratio"`
+	CleanerMaxSeeding   int64   `json:"cleaner_max_seeding"`    // in seconds
+	TimeUntilMaxRatio   int64   `json:"time_until_max_ratio"`   // in seconds, -1 if already reached or not applicable
+	TimeUntilMaxSeeding int64   `json:"time_until_max_seeding"` // in seconds, -1 if already reached or not applicable
+	TimeUntilClean      int64   `json:"time_until_clean"`       // in seconds, negative if already eligible
 }
 
 // GetCandidateTorrents returns torrents that are candidates for cleaning, sorted by closest to being cleaned
@@ -349,7 +350,7 @@ func (c *Cleaner) GetCandidateTorrents() ([]CandidateTorrent, error) {
 
 		// Find the tracker config for this torrent
 		tracker := c.findTrackerConfig(torrent.Tracker)
-		
+
 		var trackerName string = "unknown"
 		var trackerMinRatio float64 = 0
 		if tracker != nil {
@@ -359,15 +360,15 @@ func (c *Cleaner) GetCandidateTorrents() ([]CandidateTorrent, error) {
 
 		seedingDuration := time.Duration(torrent.SeedingTime) * time.Second
 		maxSeedingDuration := c.config.MaxSeedingTime.Duration()
-		
+
 		// Calculate time until max ratio and max seeding separately
 		// Use 0 to mean "not applicable" (max limit not set), -1 means "already reached", positive means "time remaining"
 		var timeUntilMaxRatio int64 = 0   // 0 = not applicable, -1 = reached, >0 = seconds until reached
-		var timeUntilMaxSeeding int64 = 0  // 0 = not applicable, -1 = reached, >0 = seconds until reached
+		var timeUntilMaxSeeding int64 = 0 // 0 = not applicable, -1 = reached, >0 = seconds until reached
 		var timeUntilClean int64 = 0
-		
+
 		// Always calculate max times (regardless of min requirements) for display purposes
-		
+
 		// Calculate time until max ratio (if max ratio is set)
 		if c.config.MaxRatio > 0 {
 			if torrent.Ratio >= c.config.MaxRatio {
@@ -393,7 +394,7 @@ func (c *Cleaner) GetCandidateTorrents() ([]CandidateTorrent, error) {
 			}
 		}
 		// else: timeUntilMaxRatio stays 0 (not applicable)
-		
+
 		// Calculate time until max seeding time
 		if maxSeedingDuration > 0 {
 			if seedingDuration >= maxSeedingDuration {
@@ -403,16 +404,16 @@ func (c *Cleaner) GetCandidateTorrents() ([]CandidateTorrent, error) {
 			}
 		}
 		// else: timeUntilMaxSeeding stays 0 (not applicable)
-		
+
 		// Check if minimum requirements are met
 		minRatioMet := trackerMinRatio == 0 || torrent.Ratio >= trackerMinRatio
 		minSeedingTimeMet := tracker == nil || tracker.MinSeedingTime.Duration() == 0 || seedingDuration >= tracker.MinSeedingTime.Duration()
-		
+
 		if minRatioMet && minSeedingTimeMet {
 			// Min requirements met - check if max limits are reached (OR logic - either one makes it eligible)
 			maxRatioReached := c.config.MaxRatio > 0 && torrent.Ratio >= c.config.MaxRatio
 			maxSeedingReached := maxSeedingDuration > 0 && seedingDuration >= maxSeedingDuration
-			
+
 			if maxRatioReached || maxSeedingReached {
 				// Already eligible for cleaning
 				timeUntilClean = -1
@@ -421,7 +422,7 @@ func (c *Cleaner) GetCandidateTorrents() ([]CandidateTorrent, error) {
 				// Only consider valid times (not -1 or 999999999)
 				validRatioTime := timeUntilMaxRatio > 0 && timeUntilMaxRatio < 999999999
 				validSeedingTime := timeUntilMaxSeeding > 0
-				
+
 				if validRatioTime && validSeedingTime {
 					if timeUntilMaxRatio < timeUntilMaxSeeding {
 						timeUntilClean = timeUntilMaxRatio
@@ -441,7 +442,7 @@ func (c *Cleaner) GetCandidateTorrents() ([]CandidateTorrent, error) {
 			var timeUntilMinRatio int64 = 0
 			var timeUntilMinSeeding int64 = 0
 			var canMeetMinRatio bool = true
-			
+
 			// Time until min ratio
 			if trackerMinRatio > 0 && torrent.Ratio < trackerMinRatio {
 				if torrent.Upspeed > 0 && torrent.Downloaded > 0 {
@@ -457,25 +458,25 @@ func (c *Cleaner) GetCandidateTorrents() ([]CandidateTorrent, error) {
 					timeUntilMinRatio = 999999999
 				}
 			}
-			
+
 			// Time until min seeding time
 			if tracker != nil && tracker.MinSeedingTime.Duration() > 0 && seedingDuration < tracker.MinSeedingTime.Duration() {
 				timeUntilMinSeeding = int64((tracker.MinSeedingTime.Duration() - seedingDuration).Seconds())
 			}
-			
+
 			// Time until min requirements are met (whichever is longer)
 			timeUntilMinRequirements := timeUntilMinRatio
 			if timeUntilMinSeeding > timeUntilMinRatio {
 				timeUntilMinRequirements = timeUntilMinSeeding
 			}
-			
+
 			// Now calculate time until clean
 			// The torrent will be cleaned when: min requirements are met AND max limits are reached
 			// Since max limits are calculated from NOW, we need to find when both conditions will be true
-			
+
 			validRatioTime := timeUntilMaxRatio > 0 && timeUntilMaxRatio < 999999999
 			validSeedingTime := timeUntilMaxSeeding > 0
-			
+
 			// If we can't meet min ratio, we can only clean via seeding time path
 			if !canMeetMinRatio && trackerMinRatio > 0 {
 				// Can only clean via seeding time: need min seeding time AND max seeding time
@@ -502,10 +503,10 @@ func (c *Cleaner) GetCandidateTorrents() ([]CandidateTorrent, error) {
 				// For each path, we need: max(min requirements) AND max limit
 				// Since max limits are from now, we take: max(time until min requirements, time until max limit)
 				// Then take the minimum of both paths
-				
+
 				var ratioPathTime int64 = 999999999
 				var seedingPathTime int64 = 999999999
-				
+
 				// Ratio path: need min requirements met AND max ratio reached
 				if validRatioTime {
 					// Time until both are true: max(time until min requirements, time until max ratio)
@@ -518,7 +519,7 @@ func (c *Cleaner) GetCandidateTorrents() ([]CandidateTorrent, error) {
 					// Max ratio already reached, but min requirements not met yet
 					ratioPathTime = timeUntilMinRequirements
 				}
-				
+
 				// Seeding path: need min requirements met AND max seeding reached
 				if validSeedingTime {
 					// Time until both are true: max(time until min requirements, time until max seeding)
@@ -531,14 +532,14 @@ func (c *Cleaner) GetCandidateTorrents() ([]CandidateTorrent, error) {
 					// Max seeding already reached, but min requirements not met yet
 					seedingPathTime = timeUntilMinRequirements
 				}
-				
+
 				// Time until clean is whichever path is shorter (OR logic - either path can trigger cleaning)
 				if ratioPathTime < seedingPathTime {
 					timeUntilClean = ratioPathTime
 				} else {
 					timeUntilClean = seedingPathTime
 				}
-				
+
 				// If both are invalid, fall back to just time until min requirements
 				if timeUntilClean >= 999999999 {
 					timeUntilClean = timeUntilMinRequirements
@@ -560,7 +561,7 @@ func (c *Cleaner) GetCandidateTorrents() ([]CandidateTorrent, error) {
 			TimeUntilMaxSeeding: timeUntilMaxSeeding,
 			TimeUntilClean:      timeUntilClean,
 		}
-		
+
 		candidates = append(candidates, candidate)
 	}
 
@@ -582,4 +583,3 @@ func (c *Cleaner) GetCandidateTorrents() ([]CandidateTorrent, error) {
 
 	return candidates, nil
 }
-
