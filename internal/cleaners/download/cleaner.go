@@ -100,6 +100,18 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 			continue
 		}
 
+		// Ensure torrent is fully downloaded (check actual bytes, not just progress percentage)
+		// Progress can show 1.0 even when some files weren't downloaded
+		if torrent.Downloaded < torrent.Size {
+			c.logger.Debug("Skipping torrent - not fully downloaded",
+				"cleaner", c.config.Name,
+				"torrent", torrent.Name,
+				"progress", torrent.Progress,
+				"downloaded", torrent.Downloaded,
+				"size", torrent.Size)
+			continue
+		}
+
 		// Check tracker filter
 		if !c.matchesTrackerFilter(torrent.Tracker) {
 			torrentsFilteredOut++
@@ -335,6 +347,12 @@ func (c *Cleaner) GetCandidateTorrents() ([]CandidateTorrent, error) {
 	for _, torrent := range torrents {
 		// Only process completed torrents
 		if torrent.Progress < 1.0 {
+			continue
+		}
+
+		// Ensure torrent is fully downloaded (check actual bytes, not just progress percentage)
+		// Progress can show 1.0 even when some files weren't downloaded
+		if torrent.Downloaded < torrent.Size {
 			continue
 		}
 
