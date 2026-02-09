@@ -147,7 +147,37 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 
 		seedingDuration := time.Duration(torrent.SeedingTime) * time.Second
 
-		// Check if minimum requirements are met (OR logic - either min ratio OR min seeding time must be met)
+		shouldRemove := false
+		reason := ""
+
+		// If override_tracker_rules is enabled, check max limits first and clean regardless of minimum requirements
+		if c.config.OverrideTrackerRules {
+			// Check max ratio (OR logic - clean if either max is reached)
+			if c.config.MaxRatio > 0 && torrent.Ratio >= c.config.MaxRatio {
+				shouldRemove = true
+				reason = fmt.Sprintf("max_ratio (%.2f >= %.2f)", torrent.Ratio, c.config.MaxRatio)
+			}
+
+			// Check max seeding time (OR logic - clean if either max is reached)
+			if !shouldRemove && c.config.MaxSeedingTime.Duration() > 0 && seedingDuration >= c.config.MaxSeedingTime.Duration() {
+				shouldRemove = true
+				reason = fmt.Sprintf("max_seeding_time (%s >= %s)", seedingDuration, c.config.MaxSeedingTime.Duration())
+			}
+
+			// If max limits are reached, clean the torrent regardless of minimum requirements
+			if shouldRemove {
+				hashesToDelete = append(hashesToDelete, torrent.Hash)
+				trackerName := "unknown"
+				if tracker != nil {
+					trackerName = tracker.Name
+				}
+				c.logger.Info("Removing torrent (override_tracker_rules enabled)", "cleaner", c.config.Name, "torrent", torrent.Name, "tracker", trackerName, "reason", reason)
+				result.RemovedItems = append(result.RemovedItems, fmt.Sprintf("%s (%s)", torrent.Name, reason))
+				continue
+			}
+		}
+
+		// Default behavior: Check if minimum requirements are met (OR logic - either min ratio OR min seeding time must be met)
 		minRatioMet := minRatio == 0 || torrent.Ratio >= minRatio
 		minSeedingTimeMet := minSeedingTime.Duration() == 0 || seedingDuration >= minSeedingTime.Duration()
 
@@ -170,9 +200,6 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 		}
 
 		// Minimum requirements met - check if max limits are reached
-		shouldRemove := false
-		reason := ""
-
 		// Check max ratio (OR logic - clean if either max is reached)
 		if c.config.MaxRatio > 0 && torrent.Ratio >= c.config.MaxRatio {
 			shouldRemove = true
@@ -423,21 +450,18 @@ func (c *Cleaner) GetCandidateTorrents() ([]CandidateTorrent, error) {
 		}
 		// else: timeUntilMaxSeeding stays 0 (not applicable)
 
-		// Check if minimum requirements are met
-		minRatioMet := trackerMinRatio == 0 || torrent.Ratio >= trackerMinRatio
-		minSeedingTimeMet := tracker == nil || tracker.MinSeedingTime.Duration() == 0 || seedingDuration >= tracker.MinSeedingTime.Duration()
-
-		if minRatioMet && minSeedingTimeMet {
-			// Min requirements met - check if max limits are reached (OR logic - either one makes it eligible)
+		// Check if override_tracker_rules is enabled
+		if c.config.OverrideTrackerRules {
+			// If override enabled, check max limits first - if reached, torrent is eligible regardless of minimum requirements
 			maxRatioReached := c.config.MaxRatio > 0 && torrent.Ratio >= c.config.MaxRatio
 			maxSeedingReached := maxSeedingDuration > 0 && seedingDuration >= maxSeedingDuration
 
 			if maxRatioReached || maxSeedingReached {
-				// Already eligible for cleaning
+				// Max limits reached - already eligible for cleaning regardless of minimum requirements
 				timeUntilClean = -1
 			} else {
+				// Max limits not reached - calculate time until max limits are reached
 				// Time until clean is the minimum of the two (whichever limit is reached first)
-				// Only consider valid times (not -1 or 999999999)
 				validRatioTime := timeUntilMaxRatio > 0 && timeUntilMaxRatio < 999999999
 				validSeedingTime := timeUntilMaxSeeding > 0
 
@@ -456,111 +480,178 @@ func (c *Cleaner) GetCandidateTorrents() ([]CandidateTorrent, error) {
 				}
 			}
 		} else {
-			// Min requirements not met - calculate time until min requirements are met
-			var timeUntilMinRatio int64 = 0
-			var timeUntilMinSeeding int64 = 0
-			var canMeetMinRatio bool = true
+			// Default behavior: Check if minimum requirements are met first
+			maxRatioReached := c.config.MaxRatio > 0 && torrent.Ratio >= c.config.MaxRatio
+			maxSeedingReached := maxSeedingDuration > 0 && seedingDuration >= maxSeedingDuration
 
-			// Time until min ratio
-			if trackerMinRatio > 0 && torrent.Ratio < trackerMinRatio {
-				if torrent.Upspeed > 0 && torrent.Downloaded > 0 {
-					additionalUpload := (trackerMinRatio * float64(torrent.Downloaded)) - float64(torrent.Uploaded)
-					if additionalUpload > 0 {
-						timeUntilMinRatio = int64(additionalUpload / float64(torrent.Upspeed))
-					} else {
-						timeUntilMinRatio = 0 // Already met
-					}
+			if maxRatioReached || maxSeedingReached {
+				// Max limits reached - check if minimum requirements are also met
+				minRatioMet := trackerMinRatio == 0 || torrent.Ratio >= trackerMinRatio
+				minSeedingTimeMet := tracker == nil || tracker.MinSeedingTime.Duration() == 0 || seedingDuration >= tracker.MinSeedingTime.Duration()
+
+				if minRatioMet && minSeedingTimeMet {
+					// Both max limits and min requirements met - eligible for cleaning
+					timeUntilClean = -1
 				} else {
-					// Can't meet min ratio (no upload speed)
-					canMeetMinRatio = false
-					timeUntilMinRatio = 999999999
-				}
-			}
+					// Max limits reached but min requirements not met - calculate time until min requirements are met
+					var timeUntilMinRatio int64 = 0
+					var timeUntilMinSeeding int64 = 0
 
-			// Time until min seeding time
-			if tracker != nil && tracker.MinSeedingTime.Duration() > 0 && seedingDuration < tracker.MinSeedingTime.Duration() {
-				timeUntilMinSeeding = int64((tracker.MinSeedingTime.Duration() - seedingDuration).Seconds())
-			}
-
-			// Time until min requirements are met (whichever is longer)
-			timeUntilMinRequirements := timeUntilMinRatio
-			if timeUntilMinSeeding > timeUntilMinRatio {
-				timeUntilMinRequirements = timeUntilMinSeeding
-			}
-
-			// Now calculate time until clean
-			// The torrent will be cleaned when: min requirements are met AND max limits are reached
-			// Since max limits are calculated from NOW, we need to find when both conditions will be true
-
-			validRatioTime := timeUntilMaxRatio > 0 && timeUntilMaxRatio < 999999999
-			validSeedingTime := timeUntilMaxSeeding > 0
-
-			// If we can't meet min ratio, we can only clean via seeding time path
-			if !canMeetMinRatio && trackerMinRatio > 0 {
-				// Can only clean via seeding time: need min seeding time AND max seeding time
-				// Max seeding time is calculated from now, so we need max(min seeding time, max seeding time from now)
-				// But actually, we need BOTH: min seeding time must be met, AND then max seeding time must be reached
-				// So: time until min seeding + remaining time until max seeding (from when min is met)
-				if validSeedingTime {
-					// If max seeding time is reached before min seeding time, we still need to wait for min
-					if timeUntilMaxSeeding < timeUntilMinSeeding {
-						timeUntilClean = timeUntilMinSeeding
-					} else {
-						// Min seeding will be met first, then we need remaining time until max seeding
-						// But max seeding is calculated from now, so: max seeding time from now
-						timeUntilClean = timeUntilMaxSeeding
+					if trackerMinRatio > 0 && torrent.Ratio < trackerMinRatio {
+						if torrent.Upspeed > 0 && torrent.Downloaded > 0 {
+							additionalUpload := (trackerMinRatio * float64(torrent.Downloaded)) - float64(torrent.Uploaded)
+							if additionalUpload > 0 {
+								timeUntilMinRatio = int64(additionalUpload / float64(torrent.Upspeed))
+							}
+						} else {
+							timeUntilMinRatio = 999999999
+						}
 					}
-				} else if timeUntilMaxSeeding == -1 {
-					// Max seeding already reached, but min seeding not met yet
-					timeUntilClean = timeUntilMinSeeding
-				} else {
-					timeUntilClean = 999999999 // Can't determine
+
+					if tracker != nil && tracker.MinSeedingTime.Duration() > 0 && seedingDuration < tracker.MinSeedingTime.Duration() {
+						timeUntilMinSeeding = int64((tracker.MinSeedingTime.Duration() - seedingDuration).Seconds())
+					}
+
+					timeUntilMinRequirements := timeUntilMinRatio
+					if timeUntilMinSeeding > timeUntilMinRatio {
+						timeUntilMinRequirements = timeUntilMinSeeding
+					}
+
+					timeUntilClean = timeUntilMinRequirements
 				}
 			} else {
-				// Can meet both min requirements - consider both ratio and seeding paths
-				// For each path, we need: max(min requirements) AND max limit
-				// Since max limits are from now, we take: max(time until min requirements, time until max limit)
-				// Then take the minimum of both paths
+				// Max limits not reached - check if minimum requirements are met
+				minRatioMet := trackerMinRatio == 0 || torrent.Ratio >= trackerMinRatio
+				minSeedingTimeMet := tracker == nil || tracker.MinSeedingTime.Duration() == 0 || seedingDuration >= tracker.MinSeedingTime.Duration()
 
-				var ratioPathTime int64 = 999999999
-				var seedingPathTime int64 = 999999999
+				if minRatioMet && minSeedingTimeMet {
+					// Min requirements met - calculate time until max limits are reached
+					// Time until clean is the minimum of the two (whichever limit is reached first)
+					// Only consider valid times (not -1 or 999999999)
+					validRatioTime := timeUntilMaxRatio > 0 && timeUntilMaxRatio < 999999999
+					validSeedingTime := timeUntilMaxSeeding > 0
 
-				// Ratio path: need min requirements met AND max ratio reached
-				if validRatioTime {
-					// Time until both are true: max(time until min requirements, time until max ratio)
-					if timeUntilMinRequirements > timeUntilMaxRatio {
-						ratioPathTime = timeUntilMinRequirements
+					if validRatioTime && validSeedingTime {
+						if timeUntilMaxRatio < timeUntilMaxSeeding {
+							timeUntilClean = timeUntilMaxRatio
+						} else {
+							timeUntilClean = timeUntilMaxSeeding
+						}
+					} else if validRatioTime {
+						timeUntilClean = timeUntilMaxRatio
+					} else if validSeedingTime {
+						timeUntilClean = timeUntilMaxSeeding
 					} else {
-						ratioPathTime = timeUntilMaxRatio
+						timeUntilClean = -1 // Can't determine
 					}
-				} else if timeUntilMaxRatio == -1 {
-					// Max ratio already reached, but min requirements not met yet
-					ratioPathTime = timeUntilMinRequirements
-				}
-
-				// Seeding path: need min requirements met AND max seeding reached
-				if validSeedingTime {
-					// Time until both are true: max(time until min requirements, time until max seeding)
-					if timeUntilMinRequirements > timeUntilMaxSeeding {
-						seedingPathTime = timeUntilMinRequirements
-					} else {
-						seedingPathTime = timeUntilMaxSeeding
-					}
-				} else if timeUntilMaxSeeding == -1 {
-					// Max seeding already reached, but min requirements not met yet
-					seedingPathTime = timeUntilMinRequirements
-				}
-
-				// Time until clean is whichever path is shorter (OR logic - either path can trigger cleaning)
-				if ratioPathTime < seedingPathTime {
-					timeUntilClean = ratioPathTime
 				} else {
-					timeUntilClean = seedingPathTime
-				}
+					// Min requirements not met - calculate time until min requirements are met
+					var timeUntilMinRatio int64 = 0
+					var timeUntilMinSeeding int64 = 0
+					var canMeetMinRatio bool = true
 
-				// If both are invalid, fall back to just time until min requirements
-				if timeUntilClean >= 999999999 {
-					timeUntilClean = timeUntilMinRequirements
+					// Time until min ratio
+					if trackerMinRatio > 0 && torrent.Ratio < trackerMinRatio {
+						if torrent.Upspeed > 0 && torrent.Downloaded > 0 {
+							additionalUpload := (trackerMinRatio * float64(torrent.Downloaded)) - float64(torrent.Uploaded)
+							if additionalUpload > 0 {
+								timeUntilMinRatio = int64(additionalUpload / float64(torrent.Upspeed))
+							} else {
+								timeUntilMinRatio = 0 // Already met
+							}
+						} else {
+							// Can't meet min ratio (no upload speed)
+							canMeetMinRatio = false
+							timeUntilMinRatio = 999999999
+						}
+					}
+
+					// Time until min seeding time
+					if tracker != nil && tracker.MinSeedingTime.Duration() > 0 && seedingDuration < tracker.MinSeedingTime.Duration() {
+						timeUntilMinSeeding = int64((tracker.MinSeedingTime.Duration() - seedingDuration).Seconds())
+					}
+
+					// Time until min requirements are met (whichever is longer)
+					timeUntilMinRequirements := timeUntilMinRatio
+					if timeUntilMinSeeding > timeUntilMinRatio {
+						timeUntilMinRequirements = timeUntilMinSeeding
+					}
+
+					// Now calculate time until clean
+					// The torrent will be cleaned when: min requirements are met AND max limits are reached
+					// Since max limits are calculated from NOW, we need to find when both conditions will be true
+
+					validRatioTime := timeUntilMaxRatio > 0 && timeUntilMaxRatio < 999999999
+					validSeedingTime := timeUntilMaxSeeding > 0
+
+					// If we can't meet min ratio, we can only clean via seeding time path
+					if !canMeetMinRatio && trackerMinRatio > 0 {
+						// Can only clean via seeding time: need min seeding time AND max seeding time
+						// Max seeding time is calculated from now, so we need max(min seeding time, max seeding time from now)
+						// But actually, we need BOTH: min seeding time must be met, AND then max seeding time must be reached
+						// So: time until min seeding + remaining time until max seeding (from when min is met)
+						if validSeedingTime {
+							// If max seeding time is reached before min seeding time, we still need to wait for min
+							if timeUntilMaxSeeding < timeUntilMinSeeding {
+								timeUntilClean = timeUntilMinSeeding
+							} else {
+								// Min seeding will be met first, then we need remaining time until max seeding
+								// But max seeding is calculated from now, so: max seeding time from now
+								timeUntilClean = timeUntilMaxSeeding
+							}
+						} else if timeUntilMaxSeeding == -1 {
+							// Max seeding already reached, but min seeding not met yet
+							timeUntilClean = timeUntilMinSeeding
+						} else {
+							timeUntilClean = 999999999 // Can't determine
+						}
+					} else {
+						// Can meet both min requirements - consider both ratio and seeding paths
+						// For each path, we need: max(min requirements) AND max limit
+						// Since max limits are from now, we take: max(time until min requirements, time until max limit)
+						// Then take the minimum of both paths
+
+						var ratioPathTime int64 = 999999999
+						var seedingPathTime int64 = 999999999
+
+						// Ratio path: need min requirements met AND max ratio reached
+						if validRatioTime {
+							// Time until both are true: max(time until min requirements, time until max ratio)
+							if timeUntilMinRequirements > timeUntilMaxRatio {
+								ratioPathTime = timeUntilMinRequirements
+							} else {
+								ratioPathTime = timeUntilMaxRatio
+							}
+						} else if timeUntilMaxRatio == -1 {
+							// Max ratio already reached, but min requirements not met yet
+							ratioPathTime = timeUntilMinRequirements
+						}
+
+						// Seeding path: need min requirements met AND max seeding reached
+						if validSeedingTime {
+							// Time until both are true: max(time until min requirements, time until max seeding)
+							if timeUntilMinRequirements > timeUntilMaxSeeding {
+								seedingPathTime = timeUntilMinRequirements
+							} else {
+								seedingPathTime = timeUntilMaxSeeding
+							}
+						} else if timeUntilMaxSeeding == -1 {
+							// Max seeding already reached, but min requirements not met yet
+							seedingPathTime = timeUntilMinRequirements
+						}
+
+						// Time until clean is whichever path is shorter (OR logic - either path can trigger cleaning)
+						if ratioPathTime < seedingPathTime {
+							timeUntilClean = ratioPathTime
+						} else {
+							timeUntilClean = seedingPathTime
+						}
+
+						// If both are invalid, fall back to just time until min requirements
+						if timeUntilClean >= 999999999 {
+							timeUntilClean = timeUntilMinRequirements
+						}
+					}
 				}
 			}
 		}

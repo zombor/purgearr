@@ -302,17 +302,18 @@ type SeedingTimeConfig struct {
 
 // DownloadCleanerConfig defines a download cleaner instance
 type DownloadCleanerConfig struct {
-	ID             string           `yaml:"id" json:"id"`
-	Name           string           `yaml:"name" json:"name"`
-	Enabled        bool             `yaml:"enabled" json:"enabled"`
-	DryRun         bool             `yaml:"dry_run" json:"dry_run"`                   // If true, don't actually delete torrents
-	Schedule       string           `yaml:"schedule" json:"schedule"`                 // cron-like schedule (e.g., "every 1h")
-	Clients        ClientSelection  `yaml:"clients" json:"clients"`                   // Client selection (empty arrays = use all enabled)
-	Trackers       TrackerSelection `yaml:"trackers" json:"trackers"`                 // Tracker filtering configuration
-	Categories     CategorySelection `yaml:"categories" json:"categories"`            // Category filtering configuration
-	MaxRatio       float64          `yaml:"max_ratio" json:"max_ratio"`               // Maximum ratio - clean when reached (if min requirements met)
-	MaxSeedingTime Duration         `yaml:"max_seeding_time" json:"max_seeding_time"` // Maximum seeding time - clean when reached (if min requirements met)
-	DeleteFiles    bool             `yaml:"delete_files" json:"delete_files"`         // If true, delete files along with torrents
+	ID                 string           `yaml:"id" json:"id"`
+	Name               string           `yaml:"name" json:"name"`
+	Enabled            bool             `yaml:"enabled" json:"enabled"`
+	DryRun             bool             `yaml:"dry_run" json:"dry_run"`                   // If true, don't actually delete torrents
+	Schedule           string           `yaml:"schedule" json:"schedule"`                 // cron-like schedule (e.g., "every 1h")
+	Clients            ClientSelection  `yaml:"clients" json:"clients"`                   // Client selection (empty arrays = use all enabled)
+	Trackers           TrackerSelection `yaml:"trackers" json:"trackers"`                 // Tracker filtering configuration
+	Categories         CategorySelection `yaml:"categories" json:"categories"`            // Category filtering configuration
+	MaxRatio           float64          `yaml:"max_ratio" json:"max_ratio"`               // Maximum ratio - clean when reached (if min requirements met)
+	MaxSeedingTime     Duration         `yaml:"max_seeding_time" json:"max_seeding_time"` // Maximum seeding time - clean when reached (if min requirements met)
+	DeleteFiles        bool             `yaml:"delete_files" json:"delete_files"`         // If true, delete files along with torrents
+	OverrideTrackerRules bool           `yaml:"override_tracker_rules" json:"override_tracker_rules"` // If true, check max limits first and clean regardless of tracker minimums
 }
 
 // Load reads configuration from a file
