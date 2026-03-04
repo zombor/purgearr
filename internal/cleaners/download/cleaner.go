@@ -489,7 +489,7 @@ func (c *Cleaner) GetCandidateTorrents() ([]CandidateTorrent, error) {
 				minRatioMet := trackerMinRatio == 0 || torrent.Ratio >= trackerMinRatio
 				minSeedingTimeMet := tracker == nil || tracker.MinSeedingTime.Duration() == 0 || seedingDuration >= tracker.MinSeedingTime.Duration()
 
-				if minRatioMet && minSeedingTimeMet {
+				if minRatioMet || minSeedingTimeMet {
 					// Both max limits and min requirements met - eligible for cleaning
 					timeUntilClean = -1
 				} else {
@@ -524,7 +524,7 @@ func (c *Cleaner) GetCandidateTorrents() ([]CandidateTorrent, error) {
 				minRatioMet := trackerMinRatio == 0 || torrent.Ratio >= trackerMinRatio
 				minSeedingTimeMet := tracker == nil || tracker.MinSeedingTime.Duration() == 0 || seedingDuration >= tracker.MinSeedingTime.Duration()
 
-				if minRatioMet && minSeedingTimeMet {
+				if minRatioMet || minSeedingTimeMet {
 					// Min requirements met - calculate time until max limits are reached
 					// Time until clean is the minimum of the two (whichever limit is reached first)
 					// Only consider valid times (not -1 or 999999999)
