@@ -475,7 +475,7 @@ func (c *Cleaner) GetCandidateTorrents() ([]CandidateTorrent, error) {
 				} else if validSeedingTime {
 					timeUntilClean = timeUntilMaxSeeding
 				} else {
-					timeUntilClean = -1 // Can't determine
+					timeUntilClean = 999999999 // Can't determine - no upload speed and no seeding time limit
 				}
 			}
 		} else {
@@ -541,7 +541,7 @@ func (c *Cleaner) GetCandidateTorrents() ([]CandidateTorrent, error) {
 					} else if validSeedingTime {
 						timeUntilClean = timeUntilMaxSeeding
 					} else {
-						timeUntilClean = -1 // Can't determine
+						timeUntilClean = 999999999 // Can't determine - no upload speed and no seeding time limit
 					}
 				} else {
 					// Min requirements not met - calculate time until min requirements are met
