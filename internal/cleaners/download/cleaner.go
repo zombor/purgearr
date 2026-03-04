@@ -100,15 +100,14 @@ func (c *Cleaner) Clean() (*CleanResult, error) {
 			continue
 		}
 
-		// Ensure torrent is fully downloaded (check actual bytes, not just progress percentage)
-		// Progress can show 1.0 even when some files weren't downloaded
-		if torrent.Downloaded < torrent.Size {
-			c.logger.Debug("Skipping torrent - not fully downloaded",
+		// Ensure torrent has been completed (CompletionOn is set)
+		// Downloaded < Size is unreliable for re-added torrents where the session counter resets
+		if torrent.CompletionOn <= 0 {
+			c.logger.Debug("Skipping torrent - not completed",
 				"cleaner", c.config.Name,
 				"torrent", torrent.Name,
 				"progress", torrent.Progress,
-				"downloaded", torrent.Downloaded,
-				"size", torrent.Size)
+				"completion_on", torrent.CompletionOn)
 			continue
 		}
 
@@ -377,9 +376,9 @@ func (c *Cleaner) GetCandidateTorrents() ([]CandidateTorrent, error) {
 			continue
 		}
 
-		// Ensure torrent is fully downloaded (check actual bytes, not just progress percentage)
-		// Progress can show 1.0 even when some files weren't downloaded
-		if torrent.Downloaded < torrent.Size {
+		// Ensure torrent has been completed (CompletionOn is set)
+		// Downloaded < Size is unreliable for re-added torrents where the session counter resets
+		if torrent.CompletionOn <= 0 {
 			continue
 		}
 
