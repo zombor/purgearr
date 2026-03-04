@@ -623,7 +623,7 @@
                 let html = '';
                 for (const torrent of candidates) {
                     const seedingTimeFormatted = formatDuration(torrent.seeding_time);
-                    const timeUntilCleanFormatted = formatDuration(torrent.time_until_clean);
+                    const timeUntilCleanFormatted = torrent.time_until_clean >= 999999999 ? 'Unknown (no upload)' : formatDuration(torrent.time_until_clean);
                     const maxSeedingFormatted = torrent.cleaner_max_seeding > 0 ? formatDuration(torrent.cleaner_max_seeding) : 'N/A';
                     
                     // Format time until max ratio
